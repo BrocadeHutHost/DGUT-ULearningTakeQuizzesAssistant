@@ -1,7 +1,9 @@
 # DGUT 优学院自动学习与题库助手O(∩_∩)O
 
 > 一款专为东莞理工学院 (DGUT) 及优学院平台打造的脚本。集成视频倍速刷课、自动答题、题库查询与本地题库 Word 导出等功能，支持明暗主题切换与拖拽。
-> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y，BUG及功能改进请提交issue，想要参与项目请提交拉取请求。
+> 
+> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="150" height="40" alt="image" src="https://github.com/user-attachments/assets/e5a52b0f-4ec8-43c6-9c11-f4ee78839b4f" />
+，BUG及功能改进请提交issue，想要参与项目请提交拉取请求。
 ---
 
 ## 目录
