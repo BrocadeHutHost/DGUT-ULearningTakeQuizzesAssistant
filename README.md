@@ -102,7 +102,7 @@
 **Q: 提示“IP受限(E403或E503)”或查询不到答案怎么办？**
 A: 题库服务器为了防止滥用，可能会对免费 IP 进行限制。你可以通过点击提示获取 Token，输入授权码以提升稳定性。如果没有 Token，请稍后再试或通过正常做题积累贡献。还有一种可能是当前页面没有题目但是你点击了获取答案，显示如下：
 
-<img width="315" height="525" alt="image" src="https://github.com/user-attachments/assets/88fe2349-2cb8-400c-88fb-e16a1809fc4b" />
+<img width="315" height="525" alt="image" src="https://github.com/user-attachments/assets/88fe2349-2cb8-400c-88fb-e16a1809fc4b" />或
 <img width="279" height="326" alt="image" src="https://github.com/user-attachments/assets/ccbb551a-aefb-48bb-ad2c-928c991a331f" />
 
 
