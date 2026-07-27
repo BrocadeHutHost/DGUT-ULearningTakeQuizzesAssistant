@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         DGUT 优学院自动学习与题库助手
 // @namespace    https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant
-// @version      0.2.4
+// @version      0.2.5
 // @description  Ulearning/DGUT 自动化学习助手：支持视频倍速、自动答题、题库查询与 Word 导出。
 // @author       锦廑主人
 // @match        https://utest.ulearning.cn/*
