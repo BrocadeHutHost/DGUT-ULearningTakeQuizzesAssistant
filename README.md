@@ -1,7 +1,7 @@
-# DGUT 优学院自动学习与题库助手 (⌐■_■)
+# DGUT 优学院自动学习与题库助手O(∩_∩)O
 
-> 一款专为东莞理工学院 (DGUT) 及优学院平台打造的 Tampermonkey 油猴脚本。集成视频倍速刷课、自动答题、题库查询与本地题库 Word 导出等功能。采用 Material Design 3 风格 UI，支持明暗主题切换与拖拽。
-
+> 一款专为东莞理工学院 (DGUT) 及优学院平台打造的脚本。集成视频倍速刷课、自动答题、题库查询与本地题库 Word 导出等功能，支持明暗主题切换与拖拽。
+> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y，BUG及功能改进请提交issue，想要参与项目请提交拉取请求。
 ---
 
 ## 目录
@@ -47,6 +47,9 @@
 ## 使用说明
 
 ### 基础面板操作
+<img width="314" height="504" alt="image" src="https://github.com/user-attachments/assets/ab46d70c-9002-4dc0-9c4f-5cbfdb8179c6" />
+
+<img width="315" height="504" alt="image" src="https://github.com/user-attachments/assets/a55c3f86-efa4-46a8-b3ea-80cff551b7f9" />
 
 - **拖拽面板**：按住面板顶部的标题栏（“DGUT 优学院助手”区域）即可将面板拖动到屏幕任意位置。
 - **切换主题**：点击标题栏右侧的太阳/月亮图标，可在浅色和深色主题之间切换，设置将自动记忆。
