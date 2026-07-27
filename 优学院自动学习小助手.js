@@ -875,15 +875,16 @@
             <div class="md-modal-box">
                 <h3>脚本详情 <span style="font-size:12px; font-weight:400; opacity:0.7">v${GM_info.script.version}</span></h3>
                 <p><b>作者:</b> 锦廑主人 \\(￣︶￣*\\))</p>
-                <p><b>开源许可:</b> GPL-3.0</p>
+                <p><b>开源许可:</b> AGPL-3.0</p>
                 <div style="opacity: 0.9; font-size: 14px; line-height: 1.8; margin-top: 12px; padding: 12px; background: #f8f9fa; border-radius: 8px; color: #444;">
                     本脚本仅供学习交流与自动化测试使用，请勿用于任何违规用途。使用本脚本产生的一切后果由使用者自行承担。<br>
                     用户必须遵守以下规则：
                     <ol style="margin: 8px 0 0 20px; padding: 0;">
                         <li style="margin-bottom: 6px;"><b>源码开放：</b>分发时必须提供源代码，确保接收者能够自由修改和使用。</li>
-                        <li style="margin-bottom: 6px;"><b>许可证传递性：</b>任何基于 GPL 软件的修改版本也必须遵守 GPL 协议，确保自由的延续。</li>
+                        <li style="margin-bottom: 6px;"><b>许可证传递性：</b>任何基于 AGPL 软件的修改版本也必须遵守 AGPL 协议，确保自由的延续。</li>
                         <li style="margin-bottom: 6px;"><b>专利保护：</b>贡献者自动授予专利许可，防止专利诉讼破坏开源生态。</li>
                         <li style="margin-bottom: 6px;"><b>破解允许：</b>用户可以自由破解软件的技术限制，例如在消费类硬件上运行修改后的代码。</li>
+                        <li style="margin-bottom: 6px;"><b>软件分发：</b>即使不分发，只要允许用户通过网络使用该软件，即视为“传播”，用户有权获取源码。</li>
                     </ol>
                 </div>
                 <p style="font-size: 14px; line-height: 1.8; margin-top: 16px; color: #555;">
