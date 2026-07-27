@@ -2,7 +2,7 @@
 
 > 一款专为东莞理工学院 (DGUT) 及优学院平台打造的脚本。集成视频倍速刷课、自动答题、题库查询与本地题库 Word 导出等功能，支持明暗主题切换与拖拽。
 > 
-> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="150" height="40" alt="image" src="https://github.com/user-attachments/assets/e5a52b0f-4ec8-43c6-9c11-f4ee78839b4f" />
+> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />
 ，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />
 ，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />
 。
