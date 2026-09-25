@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.0.0
+// @version      5.0.1
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -925,8 +925,55 @@
     }
     function pgClearBank() { GM_setValue(BANK_KEY, []); showStatus('题库已清空'); }
 
-    // ---- 主循环 ----
+    // ================= 主循环（本次修改重点） =================
     let gPgAnswering = false, gPgQuestionUntil = 0;
+    let gPgLastFlipAt = 0;        // 上次翻页时间戳（冷却用）
+    let gPgLastPageKey = '';       // 上次翻页时的页码指纹
+
+    // 生成当前页面的指纹：section 名 + active page 名
+    function pgPageKey() {
+        const a = document.querySelector('.page-name.active');
+        if (!a) return '';
+        const sec = a.closest('.section-item');
+        const secName = sec ? ((sec.querySelector('.section-name .text') || {}).textContent || '') : '';
+        return secName.trim() + '|' + (a.textContent || '').trim();
+    }
+
+    // 页面上的"媒体容器"数量（视频骨架/播放器容器）。比 <video> 稳定得多。
+    // 优学院课件页在切换小节时，.file-media 会先渲染；<video> 由 mejs 挂载才有。
+    function pgMediaContainerCount() {
+        return document.querySelectorAll(
+            '.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech'
+        ).length;
+    }
+
+    // 只取"可见"的 <video>，排除隐藏、残留、广告 video
+    function pgVisibleVideos() {
+        return Array.from(document.querySelectorAll('video')).filter(v => {
+            if (!v.isConnected) return false;
+            const r = v.getBoundingClientRect();
+            return r.width >= 20 && r.height >= 20;
+        });
+    }
+
+    // 带冷却 + 页码校验的翻页（唯一翻页入口）
+    function pgClickNextOnce() {
+        const now = Date.now();
+        if (now - gPgLastFlipAt < 3000) return false;      // 3 秒冷却
+        const key = pgPageKey();
+        // 冷却期内页码没变，说明上次翻页未生效，二次点击也无效
+        if (key && key === gPgLastPageKey && now - gPgLastFlipAt < 6000) return false;
+        const b = document.querySelector('.next-page-btn.cursor');
+        if (!b) return false;
+        pgTriggerMouseSequence(b);
+        gPgLastFlipAt = now;
+        gPgLastPageKey = key;
+        return true;
+    }
+
+    // 兼容旧调用（统一走带冷却的版本）
+    function pgClickNext() { return pgClickNextOnce(); }
+
     function pgDismissModal() {
         const modal = document.querySelector('.modal.fade.in');
         if (!modal || !pgVisible(modal)) return false;
@@ -957,39 +1004,62 @@
             if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
             gPgQuestionUntil = Date.now() + 1500;
             await pgSleep(900);
-            pgClickNext();
-        } finally { gPgAnswering = false; }
+            pgClickNextOnce();     // ★ 修改：与视频分支共用同一个翻页入口
+        } finally {
+            gPgAnswering = false;
+        }
     }
-    function pgClickNext() { const b = document.querySelector('.next-page-btn.cursor'); pgTriggerMouseSequence(b); }
+
     function pgLogic() {
         if (!gCourseHelper || !gCourseHelper.running) return;
         if (pgDismissModal()) return;
+
+        // ① 题目面板优先级最高
         if (document.querySelector('.question-setting-panel')) {
             if (Date.now() < gPgQuestionUntil) return;
             pgAnswerAll();
             return;
         }
-        const videos = Array.from(document.querySelectorAll('video'));
-        if (videos.length) {
+
+        // ② 只要存在"媒体容器"，就绝不走裸翻页分支。
+        //    即便 <video> 还没挂载（切换小节的空窗期），也只是等待。
+        if (pgMediaContainerCount() > 0) {
+            const videos = pgVisibleVideos();
+            if (videos.length === 0) {
+                // 播放器骨架已渲染但 <video> 未挂载 → 等待下一轮
+                chUpdateStatus();
+                return;
+            }
             let i = 0;
             for (; i < videos.length; i++) {
                 const v = videos[i];
-                let finished = v.ended || (v.duration && v.currentTime >= v.duration);
+                const dur = Number(v.duration);
+                let finished = v.ended || (Number.isFinite(dur) && dur > 0 && v.currentTime >= dur - 0.3);
                 if (!finished) {
-                    const finNode = document.querySelectorAll("[data-bind='text: $root.i18nMessageText().finished']")[i];
-                    if (finNode && pgVisible(finNode)) finished = true;
+                    // "已完成" 标记按视频自身所属容器查，避免下标对齐错位
+                    const container = v.closest('.page-item, .section-item, .question-element-node') || v.parentElement;
+                    const finNode = container ? container.querySelector("[data-bind='text: $root.i18nMessageText().finished']") : null;
+                    // 只有 duration 就绪且 currentTime 确实接近末尾，才采信"已完成"标记
+                    if (finNode && pgVisible(finNode) && Number.isFinite(dur) && dur > 0 && v.currentTime >= dur - 1.5) {
+                        finished = true;
+                    }
                 }
                 if (finished) continue;
-                pgRateGuard.hook(v); pgRateGuard.refresh();
+
+                pgRateGuard.hook(v);
+                pgRateGuard.refresh();
                 if (Math.abs(pgRateGuard.get(v) - pgRateGuard.target) > 0.01) pgRateGuard.set(v, pgRateGuard.target);
                 if (v.paused) { v.muted = true; v.play().catch(() => {}); }
                 break;
             }
-            if (i === videos.length) pgClickNext();
+            if (i === videos.length) pgClickNextOnce();
             return;
         }
-        pgClickNext();
+
+        // ③ 页面上没有媒体容器：纯文本/图片/目录页 → 走翻页
+        pgClickNextOnce();
     }
+
     function chUpdateStatus() {
         const el = document.getElementById('dgut-ch-status');
         if (!el) return;
@@ -1006,6 +1076,9 @@
         if (!isCoursePage()) showStatus('当前不在课件页（需 ua.dgut.edu.cn/learnCourse），仍会尝试运行', true);
         gCourseHelper = { running: true, timer: null, uiTimer: null };
         pgRateGuard.start();
+        // 复位翻页冷却，避免切页残留状态干扰
+        gPgLastFlipAt = 0;
+        gPgLastPageKey = '';
         chLog(`刷课助手启动：倍速 ${cfg.rate}×，自动答题 ${cfg.autoAnswer ? '开' : '关'}，自动翻页 ${cfg.autoNext ? '开' : '关'}`, 'success');
         gCourseHelper.timer = setInterval(pgLogic, 1500);
         gCourseHelper.uiTimer = setInterval(() => { if (!gCourseHelper || !gCourseHelper.running) { clearInterval(gCourseHelper.uiTimer); return; } chUpdateStatus(); }, 2000);
@@ -1754,7 +1827,7 @@ ${sigImgs}
     }
 
     // ---------- 关于与帮助页 ----------
-    const ABOUT_VERSION = 'v5.0.0';
+    const ABOUT_VERSION = 'v5.0.1';
     function renderAboutView(ac) {
         const code = (s) => `<span style="font-family:Consolas,monospace;background:#F3EDF7;padding:1px 5px;border-radius:4px;font-size:11px;color:#6750A4;">${s}</span>`;
         ac.innerHTML = actionHeader(ACTION_TITLES.about) + `
