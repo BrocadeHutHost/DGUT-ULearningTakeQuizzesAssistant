@@ -30,7 +30,6 @@
 (function () {
     'use strict';
 
-    /* ==================== 常量与全局状态 ==================== */
     const API_HOST = 'https://lms.dgut.edu.cn';
     const TAG = '[优学院助手]';
     const UI_POS_KEY = 'dgut_ui_positions';
@@ -53,7 +52,6 @@
     const DOC_SIGN_KEY  = 'dgut_doc_signatures';
     const DEBUG = true;
 
-    /* ==================== 求是读书 子框架引导 ==================== */
     if (window.top !== window.self) {
         (function readerFrameBootstrap() {
             const MSG = 'DGUT_SINGLE_FILE_READER_SYNC';
@@ -112,7 +110,6 @@
     const log = (...a) => { if (DEBUG) console.log(TAG, ...a); };
     if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
-    /* ==================== 模块 0: 全局主题 ==================== */
     const ACCENTS = {
         purple: { name: '紫罗兰', primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D', dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF' },
         blue: { name: '蔚蓝', primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36', dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF' },
@@ -210,7 +207,6 @@
         } catch (e) {}
     }
 
-    /* ==================== 通用工具 ==================== */
     const KAO = { ok: '(｡•̀ᴗ-)✧', zen: '(－‿－)', sweat: '(；´д｀)' };
 
     function escapeHtml(str) {
@@ -316,7 +312,6 @@
         .dgut-btn svg, .dgut-ico svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
     `);
 
-    /* ==================== 模块 X1: 轻量通知 ==================== */
     let gAudioCtx = null;
     function ensureAudioCtx() {
         try {
@@ -367,7 +362,6 @@
         setTimeout(() => card.remove(), durationMs + 500);
     }
 
-    /* ==================== 模块 2: 网络与鉴权 ==================== */
     async function getAuthToken() {
         if (location.hostname === 'lms.dgut.edu.cn') {
             const match = document.cookie.match(/AUTHORIZATION=([^;]+)/);
@@ -408,7 +402,6 @@
         });
     }
 
-    /* ==================== 模块 S1: 优学院课程签到 ==================== */
     const SIGN_LMS_BASE = API_HOST + '/courseapi';
     const SIGN_APP_BASE = 'https://application.dgut.edu.cn/classroomapi';
     const SIGN_KINDS = { 0: '选人点名', 1: '二维码签到', 2: '数字码签到', 3: '一键签到' };
@@ -681,12 +674,6 @@
         else signLoadCourses(false).then(() => renderSignCourseList(box));
     }
 
-    /* ==================== 模块 S2: 优学院刷课助手 ====================
-       改造要点（参考 EliotZhang/Brush-JIM 脚本）：
-       ① 优先用平台渲染的 .video-bottom span[data-bind] 判定完成；
-       ② 翻页后进入"等待新页面就绪"状态机，直到页面 key / 视频 src / 媒体容器发生变化才解锁；
-       ③ 本地 video.ended 仅作为 duration 就绪 + readyState>=2 时的兜底；
-       ④ 8 秒超时兜底，防止卡死。 */
     const DEFAULT_COURSE_HELPER = {
         enabled: false, rate: 6,
         autoAnswer: true, autoNext: true, collectBank: true
@@ -725,7 +712,6 @@
         });
     }
 
-    // ---- 倍速守卫：重写实例 playbackRate setter + ratechange 监听 + 周期性再施加，抗平台回退（对齐增强版） ----
     const pgRateGuard = {
         target: 6, active: false, hooked: new WeakSet(), nativeDescriptor: null,
         resetHistory: [], learnedInterval: 600, timer: null,
@@ -790,7 +776,6 @@
         }
     };
 
-    // ---- Knockout 视图模型访问 ----
     function pgGetQuestionComponentVM(node) {
         try {
             const ko = PAGE_WIN.ko;
@@ -821,7 +806,6 @@
         return null;
     }
 
-    // ---- 答案来源 ----
     function pgVmAnswer(node) {
         const q = pgGetQuestionModel(node);
         if (!q || typeof q.correctAnswer !== 'function') return null;
@@ -946,15 +930,13 @@
     }
     function pgClearBank() { GM_setValue(BANK_KEY, []); showStatus('题库已清空'); }
 
-    // ================= 主循环（在增强版基础上加固：杜绝“跳课”） =================
     let gPgAnswering = false, gPgQuestionUntil = 0;
-    let gPgLastAdvanceAt = 0;      // 上次翻页时间戳（翻页节流）
-    let gPgAdvancePageId = '';     // 上次翻页时所在页面标识
-    let gPgMediaWaitSince = 0;     // 有播放器容器但 <video> 尚未挂载的计时起点
-    let gPgPageChangeAt = Date.now(); // 进入当前页的时刻（dwell 起点）
-    let gPgLastPageId = '';        // 上一次见到的页面标识
+    let gPgLastAdvanceAt = 0;
+    let gPgAdvancePageId = '';
+    let gPgMediaWaitSince = 0;
+    let gPgPageChangeAt = Date.now();
+    let gPgLastPageId = '';
 
-    // 当前课件页标识（用于翻页节流，避免同一页被连点两次 → 跳页）
     function pgPageId() {
         const a = document.querySelector('.page-name.active');
         if (!a) return '';
@@ -962,30 +944,21 @@
         const secName = sec ? ((sec.querySelector('.section-name .text') || {}).textContent || '') : '';
         return (secName + '|' + a.textContent).replace(/\s+/g, ' ').trim();
     }
-    // 页面是否存在播放器容器（视频可能尚在挂载 → 需等待，不能立即翻页）
     function pgHasMediaContainer() {
         return document.querySelectorAll('.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech, .mejs__container').length > 0;
     }
-    // 与 jQuery :visible 等价的可视判定
     function pgNodeVisible(el) {
         if (!el) return false;
         return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
     }
 
-    // 单个视频是否已完成：
-    // ① 本地“明确已播完”：仅当已加载到可播放数据（readyState>=2）、未在跳转、且 duration 有效时，
-    //    才信任 ended / currentTime>=duration —— 避免 <video> 在新页换源复用的瞬间被误判为“已完成”而跳课；
-    // ② 平台完成标记：第 index 个“已完成”文案节点可见时才算完成（与增强版一致）。
     function pgVideoFinished(v) {
         if (!v) return false;
-        // ① 本地“明确已播完”：仅当已加载到可播放数据（readyState>=2）、未在跳转、且 duration 有效时，
-        //    才信任 ended / currentTime≈duration —— 避免 <video> 在新页换源复用瞬间被误判为“已完成”。
         const dur = Number(v.duration);
         const rs = (typeof v.readyState === 'number') ? v.readyState : 2;
         if (Number.isFinite(dur) && dur > 0 && rs >= 2 && !v.seeking) {
             if (v.ended || v.currentTime >= dur - 0.3) return true;
         }
-        // ② 平台标记：只在该视频“最近且仅含它一个 video”的容器内查找，彻底避免多视频页全局索引错位导致的误判跳课。
         try {
             let node = v.parentElement, depth = 0;
             while (node && depth < 8) {
@@ -1006,13 +979,10 @@
         return false;
     }
 
-    // 翻页（唯一出口）：节流 2.5s + 同页 10s 内只翻一次，杜绝“连点跳页”
-    // 刷新“进入当前页”的时刻
     function pgTouchPageDwell() {
         const pid = pgPageId();
         if (pid !== gPgLastPageId) { gPgLastPageId = pid; gPgPageChangeAt = Date.now(); }
     }
-    // 翻页（唯一出口）：进页停留 ≥2s + 翻页节流 2.5s + 同页 10s 内只翻一次，杜绝“刚进页就跳”
     function pgClickNext() {
         const now = Date.now();
         pgTouchPageDwell();
@@ -1058,7 +1028,7 @@
             if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
             gPgQuestionUntil = Date.now() + 1500;
             await pgSleep(900);
-            pgClickNext(); // 与增强版一致：直接翻页
+            pgClickNext();
         } finally {
             gPgAnswering = false;
         }
@@ -1069,22 +1039,17 @@
         catch (e) { log('[刷课] pgLogic 异常（本轮跳过）:', e && e.message ? e.message : e); }
     }
 
-    // 主循环：① 题目面板优先；② 有 <video> 时仅推进“第一个未完成视频”，全部完成才翻页；
-    // ③ 无 <video> 但存在播放器容器 → 等待其挂载（不翻页）；④ 纯文本/图片页 → 翻页。
-    // 关键：绝不在视频尚未播完、或播放器尚未挂载时翻页，从根本上杜绝“跳过视频”。
     function pgLogic() {
         if (!gCourseHelper || !gCourseHelper.running) return;
         if (pgDismissModal()) return;
         pgTouchPageDwell();
 
-        // ① 题目面板优先
         if (document.querySelector('.question-setting-panel')) {
             if (Date.now() < gPgQuestionUntil) return;
             pgAnswerAll();
             return;
         }
 
-        // ② 视频：按 DOM 顺序处理，遇到第一个未完成的视频就播放并跳出
         const videos = Array.from(document.querySelectorAll('video'));
         if (videos.length) {
             gPgMediaWaitSince = 0;
@@ -1112,7 +1077,6 @@
             return;
         }
 
-        // ③ 有播放器容器但 <video> 尚未挂载 → 等待最多 8 秒，绝不提前翻页
         if (pgHasMediaContainer()) {
             if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
             chUpdateStatus();
@@ -1120,7 +1084,6 @@
         }
         gPgMediaWaitSince = 0;
 
-        // ④ 纯文本/图片页 → 翻页
         pgClickNext();
     }
 
@@ -1140,7 +1103,6 @@
         const cfg = getCourseHelperConfig();
         if (!isCoursePage()) showStatus('当前不在课件页（需 ua.dgut.edu.cn/learnCourse），仍会尝试运行', true);
         gCourseHelper = { running: true, timer: null, uiTimer: null };
-        // 采用“本地增强版”核心驱动（youxueyuan.logic 内部会启动 rateGuard），不再使用本脚本旧的 pgLogic
         youxueyuan.start();
         chLog(`刷课助手启动：倍速 ${cfg.rate}×`, 'success');
         gCourseHelper.uiTimer = setInterval(() => { if (!gCourseHelper || !gCourseHelper.running) { clearInterval(gCourseHelper.uiTimer); return; } chUpdateStatus(); }, 2000);
@@ -1200,7 +1162,6 @@
         ac.querySelector('#dgut-ch-stop').onclick = stopCourseHelper;
         ac.querySelector('#dgut-ch-export').onclick = () => { if (getCourseHelperConfig().collectBank) pgCollectBank(); pgExportBank(); };
         ac.querySelector('#dgut-ch-clear').onclick = pgClearBank;
-        // 运行中可即时调整倍速：写入配置 + 立即应用 + 日志/状态显示
         const rateEl = ac.querySelector('#dgut-ch-rate');
         if (rateEl) {
             let rateTimer = null;
@@ -1209,8 +1170,8 @@
                 saveCourseHelperConfig({ rate: v });
                 const running = !!(gCourseHelper && gCourseHelper.running);
                 if (running) { try { rateGuard.refreshTarget(); rateGuard.enforce(); } catch (e) {} }
-                chLog(`倍速已更新为 ${v}×${running ? '' : ''}`, 'success');
-                showStatus(`倍速已更新为 ${v}×`);
+                chLog('倍速已更新为 ' + v + 'x' + (running ? '(运行中即时生效)' : ''), 'success');
+                showStatus('倍速已更新为 ' + v + 'x');
                 chUpdateStatus();
             };
             rateEl.addEventListener('input', () => { if (rateTimer) clearTimeout(rateTimer); rateTimer = setTimeout(commitRate, 400); });
@@ -1219,16 +1180,10 @@
         chUpdateStatus();
     }
 
-    /* ==================== 模块 S2b: 优学院刷课助手核心（本地增强版原样移植） ====================
-       以下 rateGuard / youxueyuan / respondent 及其依赖，逐字移植自
-       “DGUT 优学院自动学习与题库助手 (本地增强版).user.js”，行为与该脚本一致。 */
     const $ = (typeof unsafeWindow !== 'undefined' && unsafeWindow.jQuery) ? unsafeWindow.jQuery : (typeof jQuery !== 'undefined' ? jQuery : null);
-    const jquery = $; // 不调用 noConflict（对页面自身 jQuery 调用会清掉站点的 window.$，导致其它网页打不开）
+    const jquery = $;
     const BANK_STORAGE_KEY = 'ulearn_question_bank_local_v1';
 
-    // 【关键差异补全 · 最小化】仅在优学院课件页阻止「<video> 被移除」：
-    // 增强版是“每秒把 Element.prototype.remove 置为空操作”（阻止一切移除）——过猛。
-    // 这里只拦 video，既保证“翻页瞬间 video 数量不为 0”（杜绝刚进页就跳课），又不影响页面其它 DOM 管理。
     (function installUlearnVideoRemoveGuard() {
         try {
             const isLearn = /learnCourse/i.test(location.href) || /(^|\.)ulearning\.cn$/i.test(location.hostname) || /(^|\.)dgut\.edu\.cn$/i.test(location.hostname);
@@ -1251,7 +1206,6 @@
         } catch (e) {}
     }
 
-    // ---- 基础 Helper（移植） ----
     function re_text(text) { text = String(text == null ? '' : text).replace(/<\/?.+?\/?>/g, '').replace(/\t/g, "").replace(/\n/g, "").replace(/\r/g, "").replace(/&.*?;/g, ""); return jquery ? jquery.trim(text) : text.trim(); }
     function triggerMouseSequence(el) { if (!el) return; ["mousedown", "mouseup", "click"].forEach(function (evtName) { try { el.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true })); } catch (e) { try { const evt = document.createEvent("Event"); evt.initEvent(evtName, true, true); el.dispatchEvent(evt); } catch (innerErr) {} } }); try { if (typeof el.click === "function") el.click(); } catch (e) {} }
     function splitAnswerOptions(answerArray) { let merged = []; answerArray.forEach(one => { String(one || "").split(/[,\s|，、]+/).filter(Boolean).forEach(part => merged.push(part)); }); return merged; }
@@ -1263,7 +1217,6 @@
     function findQuestionModelByIdFromGlobal(questionId) { try { if (!PAGE_WIN.koLearnCourseViewModel || typeof PAGE_WIN.koLearnCourseViewModel.currentPage !== "function") return null; const page = PAGE_WIN.koLearnCourseViewModel.currentPage(); if (!page || typeof page.pageElements !== "function") return null; const pageElements = page.pageElements(); if (!Array.isArray(pageElements)) return null; for (let i = 0; i < pageElements.length; i++) { const pe = pageElements[i]; if (!pe || typeof pe.questions !== "function") continue; const qs = pe.questions(); if (!Array.isArray(qs)) continue; for (let j = 0; j < qs.length; j++) { const q = qs[j]; if (q && typeof q.id === "function" && String(q.id()) === String(questionId)) return q; } } } catch (e) {} return null; }
     function setKoChoiceSelected(questionModel, indexList, singleMode) { if (!questionModel || typeof questionModel.choices !== "function") return; const choices = questionModel.choices(); if (!Array.isArray(choices) || choices.length === 0) return; for (let i = 0; i < choices.length; i++) if (choices[i] && typeof choices[i].isSelected === "function") choices[i].isSelected(false); for (let i = 0; i < indexList.length; i++) { const idx = indexList[i]; if (idx >= 0 && idx < choices.length && choices[idx] && typeof choices[idx].isSelected === "function") { choices[idx].isSelected(true); if (singleMode) break; } } }
 
-    // ---- 题库存储/解析（移植） ----
     let BANK_CACHE = null;
     function loadBankCache() { if (BANK_CACHE) return BANK_CACHE; try { BANK_CACHE = JSON.parse(localStorage.getItem(BANK_STORAGE_KEY)) || []; } catch (e) { BANK_CACHE = []; } return BANK_CACHE; }
     function saveBankCache() { try { localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(BANK_CACHE || [])); } catch (e) {} }
@@ -1291,7 +1244,6 @@
     function buildAnswerListForBank(answerData) { if (!answerData || typeof answerData !== "object") return []; if (Array.isArray(answerData.correctAnswerList) && answerData.correctAnswerList.length > 0) return answerData.correctAnswerList.map(x => String(x)); return []; }
     function collectQuestionNodeToBank($questionNode, answerData, sourceTag) { try { if (!$questionNode || $questionNode.length === 0) return; const w = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); if (!w) return; const record = buildRecordFromWrapper(w, buildAnswerListForBank(answerData), String(answerData && (answerData.correctreply || answerData.correctReply) || ""), sourceTag || "auto"); if (record.title) mergeRecordIntoBank(record); } catch (e) {} }
 
-    // ---- 倍速守卫（移植；倍速值改从本脚本配置读取） ----
     const rateGuard = {
         targetRate: 6.0, active: false, resetHistory: [], learnedInterval: 600, enforcementTimer: null, hookedVideos: new WeakSet(), nativeDescriptor: null,
         _captureDescriptor() { try { this.nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document.createElement('video')), 'playbackRate'); } catch (e) { this.nativeDescriptor = null; } },
@@ -1332,7 +1284,6 @@
         enforce() { if (!this.active) return; this.refreshTarget(); this.hookAllVideos(); document.querySelectorAll("video").forEach(v => { const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } }); }
     };
 
-    // ---- 视频与答题驱动（移植：与原脚本 logic() 完全一致） ----
     const youxueyuan = {
         timer: null, questionTaskUntil: 0, pendingTimeouts: [],
         _schedule(fn, delay) { const id = setTimeout(() => { try { fn(); } finally { this.pendingTimeouts = this.pendingTimeouts.filter(x => x !== id); } }, delay); this.pendingTimeouts.push(id); return id; },
@@ -1425,7 +1376,6 @@
         },
     };
 
-    // ---- 答题引擎（移植） ----
     const respondent = {
         parentId: null, questionId: null, $questionNode: null, questionModel: null, answerDataCache: null,
         _answer(parentId, $questionNode, callback) {
@@ -1585,7 +1535,6 @@
         }
     };
 
-    /* ==================== 模块 S3: 作业互评增强 ==================== */
     function peerRecords() { return GM_getValue(PEER_KEY, []) || []; }
     function peerSaveRecords(newRecords) {
         const all = peerRecords();
@@ -1749,7 +1698,6 @@
         ac.querySelector('#dgut-peer-clear').onclick = () => { if (confirm('确定清空所有互评记录？不可撤销。')) { GM_setValue(PEER_KEY, []); peerRenderList(); } };
     }
 
-    /* ==================== 模块 S4: 求是读书 ==================== */
     const READ_MIN_SEC = 4 * 3600 + 10;
     const READ_NAV_SEC = 3;
     const READ_SAVE_INTERVAL = 30;
@@ -1903,7 +1851,6 @@
         };
     }
 
-    /* ==================== 模块 S5: 文档工具 ==================== */
     function getDocDraft() { return GM_getValue(DOC_DRAFT_KEY, ''); }
     function saveDocDraft(t) { GM_setValue(DOC_DRAFT_KEY, String(t || '')); }
     function getDocTitle() { return GM_getValue(DOC_TITLE_KEY, `文档_${dateKey()}`); }
@@ -2163,7 +2110,6 @@ ${sigImgs}
         renderSignatureList();
     }
 
-    /* ==================== 模块 8: 主面板 UI ==================== */
     let gActionName = null;
     const ACTION_TITLES = {
         sign: '优学院课程签到',
@@ -2420,7 +2366,6 @@ ${sigImgs}
         showToastCard(`${KAO.ok} 位置已重置`, '面板与悬浮面板位置已恢复默认（右下角）。', '', 4000);
     }
 
-    /* ==================== 初始化 ==================== */
     function init() {
         initThemeWatcher();
         GM_registerMenuCommand('打开/关闭主面板', () => togglePanel());
