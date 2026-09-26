@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.0.1
+// @version      5.0.3
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -16,6 +16,7 @@
 // @grant        GM_notification
 // @grant        unsafeWindow
 // @require      https://cdn.jsdelivr.net/npm/marked/marked.min.js
+// @require      https://code.jquery.com/jquery-1.12.4.min.js
 // @connect      lms.dgut.edu.cn
 // @connect      application.dgut.edu.cn
 // @connect      courseapi.ulearning.cn
@@ -39,25 +40,20 @@
     const THEME_MODE_KEY = 'dgut_theme_mode';
     const ACCENT_KEY = 'dgut_theme_accent';
     const MANUAL_TOKEN_KEY = 'dgut_manual_token';
-    // 优学院课程签到
     const SIGN_CONFIG_KEY = 'dgut_sign_config';
     const SIGN_LOG_KEY = 'dgut_sign_log';
     const SIGN_USERID_KEY = 'dgut_sign_userid';
-    // 刷课（自动学习与题库助手）/ 互评 / 求是读书
     const COURSE_HELPER_KEY = 'dgut_course_helper_config';
     const BANK_KEY = 'dgut_quiz_bank';
     const PEER_KEY = 'dgut_peer_review_records';
     const READ_CFG_KEY = 'dgut_single_file_helper_config';
     const READ_RECORDS_KEY = 'dgut_reading_records';
-    // 文档工具
     const DOC_DRAFT_KEY = 'dgut_doc_md_draft';
     const DOC_TITLE_KEY = 'dgut_doc_md_title';
     const DOC_SIGN_KEY  = 'dgut_doc_signatures';
     const DEBUG = true;
 
-    /* ==================== 求是读书 子框架引导 ====================
-       阅读器运行在子框架中，父窗口负责时长统计与调度；
-       子框架只接收父窗口的 postMessage 并自动翻页（与主面板逻辑隔离）。 */
+    /* ==================== 求是读书 子框架引导 ==================== */
     if (window.top !== window.self) {
         (function readerFrameBootstrap() {
             const MSG = 'DGUT_SINGLE_FILE_READER_SYNC';
@@ -111,13 +107,12 @@
         return;
     }
 
-    // 页面（宿主）window：用于访问优学院 Knockout 视图模型 koLearnCourseViewModel
     const PAGE_WIN = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
 
     const log = (...a) => { if (DEBUG) console.log(TAG, ...a); };
     if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
-    /* ==================== 模块 0: 全局主题（亮/暗/跟随系统 + 主体色） ==================== */
+    /* ==================== 模块 0: 全局主题 ==================== */
     const ACCENTS = {
         purple: { name: '紫罗兰', primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D', dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF' },
         blue: { name: '蔚蓝', primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36', dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF' },
@@ -387,7 +382,6 @@
         if (gmCookieToken) return gmCookieToken;
         return GM_getValue(MANUAL_TOKEN_KEY, '');
     }
-    // 与 gmFetch 共用鉴权，但允许指定 method 与 JSON body，供优学院签到接口使用
     async function gmFetchEx(url, opts = {}) {
         const token = await getAuthToken();
         if (!token) throw new Error('无法获取 Token，请先登录优学院');
@@ -414,10 +408,7 @@
         });
     }
 
-    /* ==================== 模块 S1: 优学院课程签到 ====================
-       读取课程 → 轮询当日课堂活动 → 命中进行中的签到 → 调用 signByStu 提交。
-       签到类型：0=选人点名 1=二维码签到 2=数字码签到 3=一键签到。
-       诚实边界：脚本不会识别教室现场展示的二维码图片；二维码签到仅当活动数据自带签到码时才处理。 */
+    /* ==================== 模块 S1: 优学院课程签到 ==================== */
     const SIGN_LMS_BASE = API_HOST + '/courseapi';
     const SIGN_APP_BASE = 'https://application.dgut.edu.cn/classroomapi';
     const SIGN_KINDS = { 0: '选人点名', 1: '二维码签到', 2: '数字码签到', 3: '一键签到' };
@@ -691,9 +682,11 @@
     }
 
     /* ==================== 模块 S2: 优学院刷课助手 ====================
-       运行在课件页（ua.dgut.edu.cn/learnCourse / *.ulearning.cn/learnCourse）：
-       倍速守卫（重写 playbackRate setter 抗平台回退）、自动答题（答案源：KO 视图模型 correctAnswer() → 本地题库 → uaapi/questionAnswer 接口）、
-       弹窗处理、自动翻页、题库收集与导出。自动答题默认开启，但未知题型一律跳过、绝不盲点。 */
+       改造要点（参考 EliotZhang/Brush-JIM 脚本）：
+       ① 优先用平台渲染的 .video-bottom span[data-bind] 判定完成；
+       ② 翻页后进入"等待新页面就绪"状态机，直到页面 key / 视频 src / 媒体容器发生变化才解锁；
+       ③ 本地 video.ended 仅作为 duration 就绪 + readyState>=2 时的兜底；
+       ④ 8 秒超时兜底，防止卡死。 */
     const DEFAULT_COURSE_HELPER = {
         enabled: false, rate: 6,
         autoAnswer: true, autoNext: true, collectBank: true
@@ -732,9 +725,10 @@
         });
     }
 
-    // ---- 倍速守卫：重写实例 playbackRate setter + ratechange 监听，抗平台回退 ----
+    // ---- 倍速守卫：重写实例 playbackRate setter + ratechange 监听 + 周期性再施加，抗平台回退（对齐增强版） ----
     const pgRateGuard = {
         target: 6, active: false, hooked: new WeakSet(), nativeDescriptor: null,
+        resetHistory: [], learnedInterval: 600, timer: null,
         init() {
             this.target = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6));
             try {
@@ -743,8 +737,13 @@
             } catch (e) { this.nativeDescriptor = null; }
         },
         refresh() { this.target = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); },
-        start() { this.init(); this.active = true; this.hookAll(); },
-        stop() { this.active = false; },
+        start() {
+            this.init(); this.active = true; this.resetHistory = [];
+            this.hookAll();
+            if (this.timer) clearTimeout(this.timer);
+            this.scheduleNext();
+        },
+        stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } },
         get(v) { return this.nativeDescriptor && this.nativeDescriptor.get ? this.nativeDescriptor.get.call(v) : v.playbackRate; },
         set(v, r) { if (this.nativeDescriptor && this.nativeDescriptor.set) this.nativeDescriptor.set.call(v, r); else v.playbackRate = r; },
         hookAll() { document.querySelectorAll('video').forEach(v => this.hook(v)); },
@@ -757,6 +756,7 @@
                         get() { return self.nativeDescriptor.get.call(this); },
                         set(val) {
                             if (self.active && Math.abs(val - self.target) > 0.01) {
+                                self.recordReset();
                                 self.nativeDescriptor.set.call(this, val);
                                 Promise.resolve().then(() => { try { self.nativeDescriptor.set.call(this, self.target); } catch (e) {} });
                             } else self.nativeDescriptor.set.call(this, val);
@@ -765,7 +765,28 @@
                     });
                 }
             } catch (e) {}
-            v.addEventListener('ratechange', () => { if (!this.active) return; try { const cur = this.get(v); if (Math.abs(cur - this.target) > 0.01) this.set(v, this.target); } catch (e) {} });
+            v.addEventListener('ratechange', () => { if (!this.active) return; try { const cur = this.get(v); if (Math.abs(cur - this.target) > 0.01) { this.recordReset(); this.set(v, this.target); } } catch (e) {} });
+        },
+        recordReset() {
+            this.resetHistory.push(Date.now()); if (this.resetHistory.length > 20) this.resetHistory.shift();
+            if (this.resetHistory.length >= 3) {
+                const intervals = []; for (let i = 1; i < this.resetHistory.length; i++) intervals.push(this.resetHistory[i] - this.resetHistory[i - 1]);
+                intervals.sort((a, b) => a - b); const median = intervals[Math.floor(intervals.length / 2)];
+                if (median > 100 && median < 30000) this.learnedInterval = Math.min(800, Math.max(200, median - 50));
+            }
+        },
+        scheduleNext() { if (!this.active) return; this.timer = setTimeout(() => { this.enforce(); this.scheduleNext(); }, this.learnedInterval); },
+        enforce() {
+            if (!this.active) return;
+            this.refresh();
+            this.hookAll();
+            document.querySelectorAll('video').forEach((v, i) => {
+                if (Math.abs(this.get(v) - this.target) > 0.01) {
+                    this.set(v, this.target);
+                    const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[i];
+                    if (speedBtn && speedBtn.textContent !== this.target + 'x') speedBtn.textContent = this.target + 'x';
+                }
+            });
         }
     };
 
@@ -925,54 +946,87 @@
     }
     function pgClearBank() { GM_setValue(BANK_KEY, []); showStatus('题库已清空'); }
 
-    // ================= 主循环（本次修改重点） =================
+    // ================= 主循环（在增强版基础上加固：杜绝“跳课”） =================
     let gPgAnswering = false, gPgQuestionUntil = 0;
-    let gPgLastFlipAt = 0;        // 上次翻页时间戳（冷却用）
-    let gPgLastPageKey = '';       // 上次翻页时的页码指纹
+    let gPgLastAdvanceAt = 0;      // 上次翻页时间戳（翻页节流）
+    let gPgAdvancePageId = '';     // 上次翻页时所在页面标识
+    let gPgMediaWaitSince = 0;     // 有播放器容器但 <video> 尚未挂载的计时起点
+    let gPgPageChangeAt = Date.now(); // 进入当前页的时刻（dwell 起点）
+    let gPgLastPageId = '';        // 上一次见到的页面标识
 
-    // 生成当前页面的指纹：section 名 + active page 名
-    function pgPageKey() {
+    // 当前课件页标识（用于翻页节流，避免同一页被连点两次 → 跳页）
+    function pgPageId() {
         const a = document.querySelector('.page-name.active');
         if (!a) return '';
         const sec = a.closest('.section-item');
         const secName = sec ? ((sec.querySelector('.section-name .text') || {}).textContent || '') : '';
-        return secName.trim() + '|' + (a.textContent || '').trim();
+        return (secName + '|' + a.textContent).replace(/\s+/g, ' ').trim();
+    }
+    // 页面是否存在播放器容器（视频可能尚在挂载 → 需等待，不能立即翻页）
+    function pgHasMediaContainer() {
+        return document.querySelectorAll('.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech, .mejs__container').length > 0;
+    }
+    // 与 jQuery :visible 等价的可视判定
+    function pgNodeVisible(el) {
+        if (!el) return false;
+        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
     }
 
-    // 页面上的"媒体容器"数量（视频骨架/播放器容器）。比 <video> 稳定得多。
-    // 优学院课件页在切换小节时，.file-media 会先渲染；<video> 由 mejs 挂载才有。
-    function pgMediaContainerCount() {
-        return document.querySelectorAll(
-            '.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech'
-        ).length;
+    // 单个视频是否已完成：
+    // ① 本地“明确已播完”：仅当已加载到可播放数据（readyState>=2）、未在跳转、且 duration 有效时，
+    //    才信任 ended / currentTime>=duration —— 避免 <video> 在新页换源复用的瞬间被误判为“已完成”而跳课；
+    // ② 平台完成标记：第 index 个“已完成”文案节点可见时才算完成（与增强版一致）。
+    function pgVideoFinished(v) {
+        if (!v) return false;
+        // ① 本地“明确已播完”：仅当已加载到可播放数据（readyState>=2）、未在跳转、且 duration 有效时，
+        //    才信任 ended / currentTime≈duration —— 避免 <video> 在新页换源复用瞬间被误判为“已完成”。
+        const dur = Number(v.duration);
+        const rs = (typeof v.readyState === 'number') ? v.readyState : 2;
+        if (Number.isFinite(dur) && dur > 0 && rs >= 2 && !v.seeking) {
+            if (v.ended || v.currentTime >= dur - 0.3) return true;
+        }
+        // ② 平台标记：只在该视频“最近且仅含它一个 video”的容器内查找，彻底避免多视频页全局索引错位导致的误判跳课。
+        try {
+            let node = v.parentElement, depth = 0;
+            while (node && depth < 8) {
+                if (node.querySelectorAll('video').length <= 1) {
+                    const spans = node.querySelectorAll("span[data-bind*='i18nMessageText']");
+                    for (let k = 0; k < spans.length; k++) {
+                        const s = spans[k];
+                        const vis = !!(s.offsetWidth || s.offsetHeight || s.getClientRects().length);
+                        if (!vis) continue;
+                        const bind = s.getAttribute('data-bind') || '';
+                        if (bind.indexOf('.finished') !== -1) return true;
+                        if (bind.indexOf('.viewed') !== -1 || bind.indexOf('.unviewed') !== -1) return false;
+                    }
+                }
+                node = node.parentElement; depth++;
+            }
+        } catch (e) {}
+        return false;
     }
 
-    // 只取"可见"的 <video>，排除隐藏、残留、广告 video
-    function pgVisibleVideos() {
-        return Array.from(document.querySelectorAll('video')).filter(v => {
-            if (!v.isConnected) return false;
-            const r = v.getBoundingClientRect();
-            return r.width >= 20 && r.height >= 20;
-        });
+    // 翻页（唯一出口）：节流 2.5s + 同页 10s 内只翻一次，杜绝“连点跳页”
+    // 刷新“进入当前页”的时刻
+    function pgTouchPageDwell() {
+        const pid = pgPageId();
+        if (pid !== gPgLastPageId) { gPgLastPageId = pid; gPgPageChangeAt = Date.now(); }
     }
-
-    // 带冷却 + 页码校验的翻页（唯一翻页入口）
-    function pgClickNextOnce() {
+    // 翻页（唯一出口）：进页停留 ≥2s + 翻页节流 2.5s + 同页 10s 内只翻一次，杜绝“刚进页就跳”
+    function pgClickNext() {
         const now = Date.now();
-        if (now - gPgLastFlipAt < 3000) return false;      // 3 秒冷却
-        const key = pgPageKey();
-        // 冷却期内页码没变，说明上次翻页未生效，二次点击也无效
-        if (key && key === gPgLastPageKey && now - gPgLastFlipAt < 6000) return false;
+        pgTouchPageDwell();
+        if (now - gPgPageChangeAt < 2000) return false;
+        if (now - gPgLastAdvanceAt < 2500) return false;
+        const pid = pgPageId();
+        if (pid && pid === gPgAdvancePageId && now - gPgLastAdvanceAt < 10000) return false;
         const b = document.querySelector('.next-page-btn.cursor');
         if (!b) return false;
         pgTriggerMouseSequence(b);
-        gPgLastFlipAt = now;
-        gPgLastPageKey = key;
+        gPgLastAdvanceAt = now;
+        gPgAdvancePageId = pid;
         return true;
     }
-
-    // 兼容旧调用（统一走带冷却的版本）
-    function pgClickNext() { return pgClickNextOnce(); }
 
     function pgDismissModal() {
         const modal = document.querySelector('.modal.fade.in');
@@ -1004,60 +1058,70 @@
             if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
             gPgQuestionUntil = Date.now() + 1500;
             await pgSleep(900);
-            pgClickNextOnce();     // ★ 修改：与视频分支共用同一个翻页入口
+            pgClickNext(); // 与增强版一致：直接翻页
         } finally {
             gPgAnswering = false;
         }
     }
 
+    function pgLogicSafe() {
+        try { pgLogic(); }
+        catch (e) { log('[刷课] pgLogic 异常（本轮跳过）:', e && e.message ? e.message : e); }
+    }
+
+    // 主循环：① 题目面板优先；② 有 <video> 时仅推进“第一个未完成视频”，全部完成才翻页；
+    // ③ 无 <video> 但存在播放器容器 → 等待其挂载（不翻页）；④ 纯文本/图片页 → 翻页。
+    // 关键：绝不在视频尚未播完、或播放器尚未挂载时翻页，从根本上杜绝“跳过视频”。
     function pgLogic() {
         if (!gCourseHelper || !gCourseHelper.running) return;
         if (pgDismissModal()) return;
+        pgTouchPageDwell();
 
-        // ① 题目面板优先级最高
+        // ① 题目面板优先
         if (document.querySelector('.question-setting-panel')) {
             if (Date.now() < gPgQuestionUntil) return;
             pgAnswerAll();
             return;
         }
 
-        // ② 只要存在"媒体容器"，就绝不走裸翻页分支。
-        //    即便 <video> 还没挂载（切换小节的空窗期），也只是等待。
-        if (pgMediaContainerCount() > 0) {
-            const videos = pgVisibleVideos();
-            if (videos.length === 0) {
-                // 播放器骨架已渲染但 <video> 未挂载 → 等待下一轮
-                chUpdateStatus();
-                return;
-            }
+        // ② 视频：按 DOM 顺序处理，遇到第一个未完成的视频就播放并跳出
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (videos.length) {
+            gPgMediaWaitSince = 0;
             let i = 0;
             for (; i < videos.length; i++) {
                 const v = videos[i];
-                const dur = Number(v.duration);
-                let finished = v.ended || (Number.isFinite(dur) && dur > 0 && v.currentTime >= dur - 0.3);
-                if (!finished) {
-                    // "已完成" 标记按视频自身所属容器查，避免下标对齐错位
-                    const container = v.closest('.page-item, .section-item, .question-element-node') || v.parentElement;
-                    const finNode = container ? container.querySelector("[data-bind='text: $root.i18nMessageText().finished']") : null;
-                    // 只有 duration 就绪且 currentTime 确实接近末尾，才采信"已完成"标记
-                    if (finNode && pgVisible(finNode) && Number.isFinite(dur) && dur > 0 && v.currentTime >= dur - 1.5) {
-                        finished = true;
-                    }
-                }
-                if (finished) continue;
-
+                if (pgVideoFinished(v)) continue;
                 pgRateGuard.hook(v);
                 pgRateGuard.refresh();
-                if (Math.abs(pgRateGuard.get(v) - pgRateGuard.target) > 0.01) pgRateGuard.set(v, pgRateGuard.target);
-                if (v.paused) { v.muted = true; v.play().catch(() => {}); }
+                const rate = pgRateGuard.target;
+                if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate);
+                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[i];
+                if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
+                if (v.paused) {
+                    v.muted = true;
+                    v.play().catch(() => {
+                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[i];
+                        if (playBtn) playBtn.click();
+                    });
+                }
                 break;
             }
-            if (i === videos.length) pgClickNextOnce();
+            if (i === videos.length) pgClickNext();
+            else chUpdateStatus();
             return;
         }
 
-        // ③ 页面上没有媒体容器：纯文本/图片/目录页 → 走翻页
-        pgClickNextOnce();
+        // ③ 有播放器容器但 <video> 尚未挂载 → 等待最多 8 秒，绝不提前翻页
+        if (pgHasMediaContainer()) {
+            if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
+            chUpdateStatus();
+            if (Date.now() - gPgMediaWaitSince < 10000) return;
+        }
+        gPgMediaWaitSince = 0;
+
+        // ④ 纯文本/图片页 → 翻页
+        pgClickNext();
     }
 
     function chUpdateStatus() {
@@ -1070,19 +1134,16 @@
             ? `<span style="color:#2E7D32;font-weight:600;">● 运行中</span> · 页面「${escapeHtml(page || '未知')}」 · 视频 ${document.querySelectorAll('video').length} · 未完成题 ${qLeft} · 倍速 ${cfg.rate}×`
             : `<span style="color:#79747E;">○ 未运行</span>`;
     }
+
     function startCourseHelper() {
         if (gCourseHelper && gCourseHelper.running) { showStatus('刷课助手已在运行'); return; }
         const cfg = getCourseHelperConfig();
         if (!isCoursePage()) showStatus('当前不在课件页（需 ua.dgut.edu.cn/learnCourse），仍会尝试运行', true);
         gCourseHelper = { running: true, timer: null, uiTimer: null };
-        pgRateGuard.start();
-        // 复位翻页冷却，避免切页残留状态干扰
-        gPgLastFlipAt = 0;
-        gPgLastPageKey = '';
-        chLog(`刷课助手启动：倍速 ${cfg.rate}×，自动答题 ${cfg.autoAnswer ? '开' : '关'}，自动翻页 ${cfg.autoNext ? '开' : '关'}`, 'success');
-        gCourseHelper.timer = setInterval(pgLogic, 1500);
+        // 采用“本地增强版”核心驱动（youxueyuan.logic 内部会启动 rateGuard），不再使用本脚本旧的 pgLogic
+        youxueyuan.start();
+        chLog(`刷课助手启动：倍速 ${cfg.rate}×`, 'success');
         gCourseHelper.uiTimer = setInterval(() => { if (!gCourseHelper || !gCourseHelper.running) { clearInterval(gCourseHelper.uiTimer); return; } chUpdateStatus(); }, 2000);
-        pgLogic();
         chUpdateStatus();
         showToastCard(`${icons.course} 刷课助手已启动`, `倍速 ${cfg.rate}× · 自动答题/翻页`, '答案源：视图模型 → 本地题库 → 接口', 8000);
         playAlarmBeep({ count: 1, volume: 0.3 });
@@ -1093,7 +1154,8 @@
         if (gCourseHelper.timer) clearInterval(gCourseHelper.timer);
         if (gCourseHelper.uiTimer) clearInterval(gCourseHelper.uiTimer);
         gCourseHelper = null;
-        pgRateGuard.stop();
+        try { youxueyuan.stop(); } catch (e) {}
+        try { rateGuard.stop(); } catch (e) {}
         chLog('刷课助手已停止。', 'warn');
         chUpdateStatus();
         showStatus('已停止刷课助手');
@@ -1126,9 +1188,6 @@
             <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:12px;margin-bottom:12px;">
                 <div style="font-size:13px;font-weight:700;margin-bottom:6px;">运行日志</div>
                 <div id="dgut-ch-log" style="max-height:220px;overflow-y:auto;font-size:12px;background:#F7F2FA;border-radius:10px;padding:8px 10px;"></div>
-            </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:12px 14px;font-size:12px;color:#4A4458;line-height:1.8;">
-                <b>安全说明</b>：未知题型一律跳过、绝不盲点（平台测验多为"限答1次"）。答案优先取页面视图模型，其次本地题库，最后请求答案接口。本助手仅在课件页生效。
             </div>`;
         const readCfg = () => ({
             rate: Math.min(16, Math.max(1, Number(ac.querySelector('#dgut-ch-rate').value) || 6)),
@@ -1141,11 +1200,392 @@
         ac.querySelector('#dgut-ch-stop').onclick = stopCourseHelper;
         ac.querySelector('#dgut-ch-export').onclick = () => { if (getCourseHelperConfig().collectBank) pgCollectBank(); pgExportBank(); };
         ac.querySelector('#dgut-ch-clear').onclick = pgClearBank;
+        // 运行中可即时调整倍速：写入配置 + 立即应用 + 日志/状态显示
+        const rateEl = ac.querySelector('#dgut-ch-rate');
+        if (rateEl) {
+            let rateTimer = null;
+            const commitRate = () => {
+                const v = Math.min(16, Math.max(1, Number(rateEl.value) || 6));
+                saveCourseHelperConfig({ rate: v });
+                const running = !!(gCourseHelper && gCourseHelper.running);
+                if (running) { try { rateGuard.refreshTarget(); rateGuard.enforce(); } catch (e) {} }
+                chLog(`倍速已更新为 ${v}×${running ? '' : ''}`, 'success');
+                showStatus(`倍速已更新为 ${v}×`);
+                chUpdateStatus();
+            };
+            rateEl.addEventListener('input', () => { if (rateTimer) clearTimeout(rateTimer); rateTimer = setTimeout(commitRate, 400); });
+            rateEl.addEventListener('change', commitRate);
+        }
         chUpdateStatus();
     }
 
-    /* ==================== 模块 S3: 作业互评增强 ====================
-       在作业互评详情页（URL 含 stuDetail/{sid}/{hwid}）读取互评接口，去匿名化评价人，并把记录汇总到面板。 */
+    /* ==================== 模块 S2b: 优学院刷课助手核心（本地增强版原样移植） ====================
+       以下 rateGuard / youxueyuan / respondent 及其依赖，逐字移植自
+       “DGUT 优学院自动学习与题库助手 (本地增强版).user.js”，行为与该脚本一致。 */
+    const $ = (typeof unsafeWindow !== 'undefined' && unsafeWindow.jQuery) ? unsafeWindow.jQuery : (typeof jQuery !== 'undefined' ? jQuery : null);
+    const jquery = $; // 不调用 noConflict（对页面自身 jQuery 调用会清掉站点的 window.$，导致其它网页打不开）
+    const BANK_STORAGE_KEY = 'ulearn_question_bank_local_v1';
+
+    // 【关键差异补全 · 最小化】仅在优学院课件页阻止「<video> 被移除」：
+    // 增强版是“每秒把 Element.prototype.remove 置为空操作”（阻止一切移除）——过猛。
+    // 这里只拦 video，既保证“翻页瞬间 video 数量不为 0”（杜绝刚进页就跳课），又不影响页面其它 DOM 管理。
+    (function installUlearnVideoRemoveGuard() {
+        try {
+            const isLearn = /learnCourse/i.test(location.href) || /(^|\.)ulearning\.cn$/i.test(location.hostname) || /(^|\.)dgut\.edu\.cn$/i.test(location.hostname);
+            if (!isLearn) return;
+            const origRemove = Element.prototype.remove;
+            const patched = function () {
+                try { if (this && this.tagName && this.tagName.toLowerCase() === 'video') return true; } catch (e) {}
+                return origRemove.call(this);
+            };
+            const apply = () => { try { Object.defineProperty(Element.prototype, 'remove', { value: patched, writable: true, configurable: true }); } catch (e) {} };
+            apply();
+            setInterval(() => { try { if (Element.prototype.remove !== patched) apply(); } catch (e) {} }, 1000);
+        } catch (e) {}
+    })();
+
+    function debugLog(tag, message, detail) {
+        try {
+            if (DEBUG) console.log(TAG, '[刷课:' + tag + ']', message, detail === undefined ? '' : detail);
+            if (typeof chLog === 'function') chLog('[' + tag + '] ' + message, 'muted');
+        } catch (e) {}
+    }
+
+    // ---- 基础 Helper（移植） ----
+    function re_text(text) { text = String(text == null ? '' : text).replace(/<\/?.+?\/?>/g, '').replace(/\t/g, "").replace(/\n/g, "").replace(/\r/g, "").replace(/&.*?;/g, ""); return jquery ? jquery.trim(text) : text.trim(); }
+    function triggerMouseSequence(el) { if (!el) return; ["mousedown", "mouseup", "click"].forEach(function (evtName) { try { el.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true })); } catch (e) { try { const evt = document.createEvent("Event"); evt.initEvent(evtName, true, true); el.dispatchEvent(evt); } catch (innerErr) {} } }); try { if (typeof el.click === "function") el.click(); } catch (e) {} }
+    function splitAnswerOptions(answerArray) { let merged = []; answerArray.forEach(one => { String(one || "").split(/[,\s|，、]+/).filter(Boolean).forEach(part => merged.push(part)); }); return merged; }
+    function optionToIndex(opt) { const m = String(opt || "").toUpperCase().match(/[A-Z]/); return m ? m[0].charCodeAt(0) - 'A'.charCodeAt(0) : -1; }
+    function parseAnswerTextToArray(answerText) { return String(answerText || "").trim().split(/[,\s|，、]+/).map(s => s.trim()).filter(Boolean); }
+    function getKoQuestionModel($questionNode) { try { if (!PAGE_WIN.ko || !$questionNode || $questionNode.length === 0) return null; let node = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); while (node) { const ctx = PAGE_WIN.ko.contextFor ? PAGE_WIN.ko.contextFor(node) : null; if (ctx) { if (ctx.$component && ctx.$component.question) return ctx.$component.question; if (ctx.$data && ctx.$data.question) return ctx.$data.question; if (Array.isArray(ctx.$parents)) for (let i = 0; i < ctx.$parents.length; i++) if (ctx.$parents[i] && ctx.$parents[i].question) return ctx.$parents[i].question; } node = node.parentElement; } } catch (e) {} return null; }
+    function getQuestionComponentVM($questionNode) { try { if (!PAGE_WIN.ko || !$questionNode || $questionNode.length === 0) return null; let node = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); while (node) { const ctx = PAGE_WIN.ko.contextFor ? PAGE_WIN.ko.contextFor(node) : null; if (ctx && ctx.$component && typeof ctx.$component.submitQuestion === "function") return ctx.$component; node = node.parentElement; } } catch (e) {} return null; }
+    function setChoiceSelectedByDataFor($choiceItems, indexList, singleMode) { try { if (!PAGE_WIN.ko || !$choiceItems || $choiceItems.length === 0) return; for (let i = 0; i < $choiceItems.length; i++) { const d = PAGE_WIN.ko.dataFor($choiceItems.get(i)); if (d && typeof d.isSelected === "function") d.isSelected(false); } for (let i = 0; i < indexList.length; i++) { const idx = indexList[i]; if (idx < 0 || idx >= $choiceItems.length) continue; const d = PAGE_WIN.ko.dataFor($choiceItems.get(idx)); if (d && typeof d.isSelected === "function") d.isSelected(true); if (singleMode) break; } } catch (e) {} }
+    function findQuestionModelByIdFromGlobal(questionId) { try { if (!PAGE_WIN.koLearnCourseViewModel || typeof PAGE_WIN.koLearnCourseViewModel.currentPage !== "function") return null; const page = PAGE_WIN.koLearnCourseViewModel.currentPage(); if (!page || typeof page.pageElements !== "function") return null; const pageElements = page.pageElements(); if (!Array.isArray(pageElements)) return null; for (let i = 0; i < pageElements.length; i++) { const pe = pageElements[i]; if (!pe || typeof pe.questions !== "function") continue; const qs = pe.questions(); if (!Array.isArray(qs)) continue; for (let j = 0; j < qs.length; j++) { const q = qs[j]; if (q && typeof q.id === "function" && String(q.id()) === String(questionId)) return q; } } } catch (e) {} return null; }
+    function setKoChoiceSelected(questionModel, indexList, singleMode) { if (!questionModel || typeof questionModel.choices !== "function") return; const choices = questionModel.choices(); if (!Array.isArray(choices) || choices.length === 0) return; for (let i = 0; i < choices.length; i++) if (choices[i] && typeof choices[i].isSelected === "function") choices[i].isSelected(false); for (let i = 0; i < indexList.length; i++) { const idx = indexList[i]; if (idx >= 0 && idx < choices.length && choices[idx] && typeof choices[idx].isSelected === "function") { choices[idx].isSelected(true); if (singleMode) break; } } }
+
+    // ---- 题库存储/解析（移植） ----
+    let BANK_CACHE = null;
+    function loadBankCache() { if (BANK_CACHE) return BANK_CACHE; try { BANK_CACHE = JSON.parse(localStorage.getItem(BANK_STORAGE_KEY)) || []; } catch (e) { BANK_CACHE = []; } return BANK_CACHE; }
+    function saveBankCache() { try { localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(BANK_CACHE || [])); } catch (e) {} }
+    function normalizeAnswerTextByType(qType, answerArray) { const arr = Array.isArray(answerArray) ? answerArray : []; if (arr.length === 0) return ""; if (qType.indexOf("判断") !== -1) { const raw = String(arr[0]).toLowerCase(); if (raw === "true") return "正确"; if (raw === "false") return "错误"; } return arr.map(x => String(x)).join(","); }
+    function buildRecordFromWrapper(w, answerList, answerExplain, sourceTag) {
+        const idAttr = w.getAttribute("id") || "", qid = idAttr.startsWith("question") ? idAttr.substring(8) : idAttr;
+        const sort = re_text((w.querySelector(".question-sort") || {}).textContent || "");
+        const qType = re_text((w.querySelector(".question-type-tag") || {}).textContent || "");
+        const title = re_text((w.querySelector(".question-title-html") || {}).textContent || "");
+        const optionEls = w.querySelectorAll(".choice-list .choice-item"), options = [];
+        for (let j = 0; j < optionEls.length; j++) { const opt = re_text((optionEls[j].querySelector(".option") || {}).textContent || "").replace(/\.$/, ""); const txt = re_text((optionEls[j].querySelector(".text") || {}).textContent || ""); if (opt || txt) options.push((opt ? opt + "." : "") + (txt ? " " + txt : "")); }
+        let answer = Array.isArray(answerList) && answerList.length > 0 ? normalizeAnswerTextByType(qType, answerList) : re_text((w.querySelector(".correct-answer-area span:last-child") || {}).textContent || "");
+        return { qid, sort, qType, title, options, answer, explain: answerExplain || re_text((w.querySelector(".correct-reply-area span:last-child") || {}).textContent || ""), source: sourceTag || "dom", updatedAt: new Date().toISOString() };
+    }
+    function mergeRecordIntoBank(record) {
+        if (!record || !record.title) return;
+        const bank = loadBankCache(), key = record.qid ? "id:" + record.qid : "title:" + record.title;
+        let idx = bank.findIndex(item => (item.qid ? "id:" + item.qid : "title:" + item.title) === key);
+        if (idx === -1) bank.push(record);
+        else bank[idx] = Object.assign({}, bank[idx], record, { options: (record.options && record.options.length > 0) ? record.options : (bank[idx].options || []), answer: record.answer || bank[idx].answer || "", explain: record.explain || bank[idx].explain || "", updatedAt: new Date().toISOString() });
+        saveBankCache();
+    }
+    function getQuestionBankRecords() { const records = [], nodes = document.querySelectorAll(".question-element-node .question-wrapper"); nodes.forEach((w, i) => { const record = buildRecordFromWrapper(w, null, "", "dom"); if (!record.title) return; if (!record.sort) record.sort = String(i + 1); records.push(record); }); return records; }
+    function collectCurrentPageToBank() { getQuestionBankRecords().forEach(mergeRecordIntoBank); }
+    function buildAnswerListForBank(answerData) { if (!answerData || typeof answerData !== "object") return []; if (Array.isArray(answerData.correctAnswerList) && answerData.correctAnswerList.length > 0) return answerData.correctAnswerList.map(x => String(x)); return []; }
+    function collectQuestionNodeToBank($questionNode, answerData, sourceTag) { try { if (!$questionNode || $questionNode.length === 0) return; const w = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); if (!w) return; const record = buildRecordFromWrapper(w, buildAnswerListForBank(answerData), String(answerData && (answerData.correctreply || answerData.correctReply) || ""), sourceTag || "auto"); if (record.title) mergeRecordIntoBank(record); } catch (e) {} }
+
+    // ---- 倍速守卫（移植；倍速值改从本脚本配置读取） ----
+    const rateGuard = {
+        targetRate: 6.0, active: false, resetHistory: [], learnedInterval: 600, enforcementTimer: null, hookedVideos: new WeakSet(), nativeDescriptor: null,
+        _captureDescriptor() { try { this.nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document.createElement('video')), 'playbackRate'); } catch (e) { this.nativeDescriptor = null; } },
+        init() { this.targetRate = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); this._captureDescriptor(); },
+        refreshTarget() { this.targetRate = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); },
+        start() { this.init(); this.active = true; this.resetHistory = []; this.hookAllVideos(); this.scheduleNextEnforcement(); debugLog("RateGuard", "倍速守卫已启动", { target: this.targetRate, interval: this.learnedInterval }); },
+        stop() { this.active = false; if (this.enforcementTimer) { clearTimeout(this.enforcementTimer); this.enforcementTimer = null; } debugLog("RateGuard", "倍速守卫已停止"); },
+        getNativeRate(v) { return this.nativeDescriptor && this.nativeDescriptor.get ? this.nativeDescriptor.get.call(v) : v.playbackRate; },
+        setNativeRate(v, rate) { if (this.nativeDescriptor && this.nativeDescriptor.set) this.nativeDescriptor.set.call(v, rate); else v.playbackRate = rate; },
+        hookAllVideos() { document.querySelectorAll("video").forEach(v => this.hookVideo(v)); },
+        hookVideo(v) {
+            if (this.hookedVideos.has(v)) return; this.hookedVideos.add(v);
+            try {
+                if (!this.nativeDescriptor) return; const self = this;
+                Object.defineProperty(v, 'playbackRate', {
+                    get() { return self.nativeDescriptor.get.call(this); },
+                    set(val) {
+                        if (self.active && Math.abs(val - self.targetRate) > 0.01) {
+                            self.recordReset(Date.now(), val); self.nativeDescriptor.set.call(this, val);
+                            Promise.resolve().then(() => { self.nativeDescriptor.set.call(this, self.targetRate); self.updateSpeedButton(v); });
+                        } else { self.nativeDescriptor.set.call(this, val); }
+                    },
+                    configurable: true, enumerable: true
+                });
+            } catch (e) { debugLog("RateGuard", "setter 重写失败", e.message); }
+            v.addEventListener('ratechange', () => { if (!this.active) return; const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.recordReset(Date.now(), cur); this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } });
+        },
+        recordReset(timestamp, fromVal) {
+            this.resetHistory.push(timestamp); if (this.resetHistory.length > 20) this.resetHistory.shift();
+            if (this.resetHistory.length >= 3) {
+                const intervals = []; for (let i = 1; i < this.resetHistory.length; i++) intervals.push(this.resetHistory[i] - this.resetHistory[i - 1]);
+                intervals.sort((a, b) => a - b); const median = intervals[Math.floor(intervals.length / 2)];
+                if (median > 100 && median < 30000) this.learnedInterval = Math.min(800, Math.max(200, median - 50));
+            }
+        },
+        updateSpeedButton(v) { if (!$) return; const videos = document.querySelectorAll("video"); const idx = Array.from(videos).indexOf(v); if (idx === -1) return; const speedBtn = $('.mejs__button.mejs__speed-button button').eq(idx); if (speedBtn.length > 0 && speedBtn.text() !== this.targetRate + 'x') speedBtn.text(this.targetRate + 'x'); },
+        scheduleNextEnforcement() { if (!this.active) return; const delay = this.learnedInterval; this.enforcementTimer = setTimeout(() => { this.enforce(); this.scheduleNextEnforcement(); }, delay); },
+        enforce() { if (!this.active) return; this.refreshTarget(); this.hookAllVideos(); document.querySelectorAll("video").forEach(v => { const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } }); }
+    };
+
+    // ---- 视频与答题驱动（移植：与原脚本 logic() 完全一致） ----
+    const youxueyuan = {
+        timer: null, questionTaskUntil: 0, pendingTimeouts: [],
+        _schedule(fn, delay) { const id = setTimeout(() => { try { fn(); } finally { this.pendingTimeouts = this.pendingTimeouts.filter(x => x !== id); } }, delay); this.pendingTimeouts.push(id); return id; },
+        _clearPending() { this.pendingTimeouts.forEach(clearTimeout); this.pendingTimeouts = []; },
+        start() {
+            if (this.timer) clearInterval(this.timer); this._clearPending();
+            rateGuard.start();
+            try { this.logic(); } catch (e) { debugLog("VideoError", "启动时执行失败", e.message); }
+            this.timer = setInterval(() => { try { this.logic(); } catch (e) { debugLog("VideoError", "循环执行失败", e.message); } }, 1500);
+        },
+        stop() {
+            rateGuard.stop();
+            if (this.timer) { clearInterval(this.timer); this.timer = null; }
+            this._clearPending();
+            try { if ($) { const $allVideos = $("video"); for (let i = 0; i < $allVideos.length; i++) $allVideos.get(i).pause(); } } catch (e) {}
+        },
+        logic() {
+            if (!$) return;
+            if ($('.modal.fade.in').length > 0) {
+                switch ($('.modal.fade.in').attr('id')) {
+                    case 'statModal': $("#statModal .btn-hollow").eq(-1).click(); break;
+                    case 'alertModal': $("#alertModal .btn-hollow").length > 0 ? $("#alertModal .btn-hollow").eq(-1).click() : $("#alertModal .btn-submit").click(); break;
+                }
+                return;
+            }
+            if ($('.question-setting-panel').length > 0) {
+                if (Date.now() < this.questionTaskUntil) return;
+                this._clearPending();
+                let parentIdAttr = $('.page-name.active').parent().attr('id');
+                if (!parentIdAttr || parentIdAttr.length < 5) return;
+                let parentId = parentIdAttr.substring(4);
+                let $questions = $('.question-element-node');
+                collectCurrentPageToBank();
+                let totalDelay = 0, hasModelSubmitPlan = false;
+                for (let i = 0; i < $questions.length; i++) {
+                    let $q = $questions.eq(i);
+                    let qDelay = respondent._answer(parentId, $q) || 0;
+                    totalDelay += qDelay + 180;
+                    let $btn = $q.find('.question-operation-wrapper .btn-submit').first();
+                    let qidAttr = $q.find('.question-wrapper').attr('id') || "";
+                    let qid = qidAttr.startsWith("question") ? qidAttr.substring(8) : qidAttr;
+                    const compVmNow = getQuestionComponentVM($q);
+                    const qModelNow = findQuestionModelByIdFromGlobal(qid);
+                    if ((compVmNow && typeof compVmNow.submitQuestion === "function") || (qModelNow && qModelNow.koModel && typeof qModelNow.koModel.submitQuestion === "function")) hasModelSubmitPlan = true;
+                    if ($btn.length > 0) {
+                        this._schedule(() => {
+                            const compVm = getQuestionComponentVM($q);
+                            if (compVm && typeof compVm.submitQuestion === "function") { compVm.submitQuestion(); return; }
+                            const qModel = findQuestionModelByIdFromGlobal(qid);
+                            if (qModel && qModel.koModel && typeof qModel.koModel.submitQuestion === "function") {
+                                try { if (typeof qModel.type === "function" && typeof qModel.answer === "function" && typeof qModel.choices === "function") {
+                                    const qType = qModel.type();
+                                    if ((qType === 1 || qType === 2) && Array.isArray(qModel.choices())) {
+                                        const ans = [], cs = qModel.choices();
+                                        for (let k = 0; k < cs.length; k++) if (cs[k] && typeof cs[k].isSelected === "function" && cs[k].isSelected() && typeof cs[k].option === "function") ans.push(cs[k].option());
+                                        if (ans.length > 0) qModel.answer(ans);
+                                    }
+                                }} catch (e) {}
+                                qModel.koModel.submitQuestion();
+                            } else { triggerMouseSequence($btn.get(0)); }
+                        }, totalDelay);
+                    }
+                }
+                let $globalSubmitBtn = $('.question-operation-area button').eq(0);
+                if (!hasModelSubmitPlan && $globalSubmitBtn.length > 0 && $globalSubmitBtn.text() != '重做') {
+                    this._schedule(() => triggerMouseSequence($globalSubmitBtn.get(0)), totalDelay + 300);
+                }
+                this.questionTaskUntil = Date.now() + totalDelay + 1200;
+                this._schedule(() => $('.next-page-btn.cursor').click(), totalDelay + 900);
+                return;
+            }
+            if ($("video").length > 0) {
+                let $videos = $("video"); let i = 0;
+                for (; i < $videos.length; i++) {
+                    let v = $videos.get(i); let isFinished = v.ended || v.currentTime >= v.duration;
+                    if (!isFinished) { let $finishedNode = $("[data-bind='text: $root.i18nMessageText().finished']").get(i); if ($finishedNode && $($finishedNode).is(':visible')) isFinished = true; }
+                    if (isFinished) continue;
+                    rateGuard.hookVideo(v); rateGuard.refreshTarget();
+                    let _rate = rateGuard.targetRate;
+                    if (rateGuard.getNativeRate(v) !== _rate) rateGuard.setNativeRate(v, _rate);
+                    let speedBtn = $('.mejs__button.mejs__speed-button button').eq(i);
+                    if (speedBtn.length > 0 && speedBtn.text() !== _rate + 'x') speedBtn.text(_rate + 'x');
+                    if (v.paused) { v.muted = true; v.play().catch(() => { let playBtn = $('.mejs__button.mejs__playpause-button button').eq(i); if (playBtn.length > 0) playBtn.click(); }); }
+                    break;
+                }
+                if (i === $videos.length) $('.next-page-btn.cursor').click();
+                return;
+            }
+            $('.next-page-btn.cursor').click();
+        },
+    };
+
+    // ---- 答题引擎（移植） ----
+    const respondent = {
+        parentId: null, questionId: null, $questionNode: null, questionModel: null, answerDataCache: null,
+        _answer(parentId, $questionNode, callback) {
+            this.parentId = parentId; this.$questionNode = $questionNode;
+            this.questionModel = getKoQuestionModel($questionNode); this.answerDataCache = null;
+            let qidAttr = this.$questionNode.find('.question-wrapper').attr('id');
+            if (this.questionModel && typeof this.questionModel.id === "function") this.questionId = this.questionModel.id();
+            else if (!qidAttr || qidAttr.length <= 8) return;
+            else this.questionId = qidAttr.substring(8);
+            if (this.questionModel && this.questionModel.pageId) this.parentId = this.questionModel.pageId;
+            if (!this.questionModel) { this.questionModel = findQuestionModelByIdFromGlobal(this.questionId); if (this.questionModel && this.questionModel.pageId) this.parentId = this.questionModel.pageId; }
+            let questionType = $questionNode.find('.question-type-tag').text().trim();
+            this.answerDataCache = this._getAnswerData();
+            let answerLen = this.answerDataCache && Array.isArray(this.answerDataCache.correctAnswerList) ? this.answerDataCache.correctAnswerList.length : 0;
+            let resolvedType = this._resolveType(questionType, answerLen);
+            collectQuestionNodeToBank(this.$questionNode, this.answerDataCache, "auto-answer");
+            let waitMs = 120;
+            switch (resolvedType) {
+                case '多选题': waitMs = this._answerMultiSelect(); break;
+                case 'Multiple Choice': case '单选题': waitMs = this._answerSelect(); break;
+                case 'True/False': case '判断题': waitMs = this._answerJudge(); break;
+                case 'Fill in the Blank': case '填空题': waitMs = this._answerInput(); break;
+                case 'Short Answer': case '简答题': waitMs = this._answerSimpleQuestion(); break;
+                case 'Word Bank': case '选词填空': waitMs = this._answerChoicesQuestion(); break;
+                case 'Sequence': case '排序题': waitMs = this._answerRankQuestion(); break;
+                case '综合题': console.error("Unsupported question type: 综合题"); break;
+            }
+            if (callback && typeof callback == 'function') callback();
+            return waitMs;
+        },
+        _resolveType(questionType, answerLen) {
+            if (this.$questionNode.find('.blank-input').length > 0) return '填空题';
+            if (this.$questionNode.find('.cloze-input').length > 0) return '选词填空';
+            if (this.$questionNode.find('.answer-blank').length > 0) return '排序题';
+            if (this.$questionNode.find('.choice-btn.right-btn').length > 0) return '判断题';
+            if (this.$questionNode.find('.choice-list .choice-item').length > 0) return answerLen > 1 ? '多选题' : '单选题';
+            return questionType;
+        },
+        _answerMultiSelect() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $choiceItems = this.$questionNode.find('.choice-list .choice-item');
+            let answerArray = splitAnswerOptions(answerData.correctAnswerList);
+            if ($choiceItems.length === 0) return 120;
+            const pickedIdx = [];
+            for (let i = 0; i < answerArray.length; i++) { let index = optionToIndex(answerArray[i]); if (index >= 0 && index < $choiceItems.length) pickedIdx.push(index); }
+            if (!this.questionModel) {
+                let $selectedItems = this.$questionNode.find('.choice-list .choice-item .checkbox.selected').closest('.choice-item');
+                for (let i = 0; i < $selectedItems.length; i++) triggerMouseSequence($selectedItems[i]);
+                for (let i = 0; i < pickedIdx.length; i++) triggerMouseSequence($choiceItems[pickedIdx[i]]);
+            }
+            setChoiceSelectedByDataFor($choiceItems, pickedIdx, false);
+            setKoChoiceSelected(this.questionModel, pickedIdx, false);
+            if (this.questionModel && typeof this.questionModel.answer === "function") {
+                const normalized = answerArray.map(x => String(x).toUpperCase().match(/[A-Z]/)).filter(Boolean).map(m => m[0]);
+                this.questionModel.answer(normalized);
+            }
+            return this.questionModel ? 160 : Math.max(220, answerArray.length * 180 + 120);
+        },
+        _answerSelect() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $choiceItems = this.$questionNode.find('.choice-list .choice-item');
+            let answerArray = splitAnswerOptions(answerData.correctAnswerList);
+            if ($choiceItems.length === 0 || answerArray.length === 0) return 120;
+            let index = optionToIndex(answerArray[0]); if (index < 0 || index >= $choiceItems.length) return 120;
+            setChoiceSelectedByDataFor($choiceItems, [index], true);
+            setKoChoiceSelected(this.questionModel, [index], true);
+            if (!this.questionModel) triggerMouseSequence($choiceItems[index]);
+            if (this.questionModel && typeof this.questionModel.answer === "function") {
+                const opt = String(answerArray[0]).toUpperCase().match(/[A-Z]/);
+                this.questionModel.answer(opt ? [opt[0]] : []);
+            }
+            return this.questionModel ? 120 : 160;
+        },
+        _answerJudge() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData || answerData.correctAnswerList.length === 0) return 120;
+            let questionAnswer = answerData.correctAnswerList[0];
+            if (questionAnswer == "true") triggerMouseSequence(this.$questionNode.find('.choice-btn.right-btn').get(0));
+            else triggerMouseSequence(this.$questionNode.find('.choice-btn.wrong-btn').get(0));
+            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(questionAnswer == "true");
+            return 160;
+        },
+        _answerInput() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $emptyInput = this.$questionNode.find('.blank-input');
+            let inputAnswers = answerData.correctAnswerList, normalized = [];
+            for (let i = 0; i < inputAnswers.length; i++) {
+                let answerText = String(inputAnswers[i] || ""); normalized.push(answerText);
+                let el = $emptyInput.eq(i).get(0); if (!el) continue;
+                el.value = answerText;
+                try { el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {}
+            }
+            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized);
+            return Math.max(180, normalized.length * 120 + 80);
+        },
+        _answerSimpleQuestion() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $emptyInput = this.$questionNode.find('.form-control');
+            let inputAnswers = answerData.correctAnswerList, normalized = [];
+            for (let i = 0; i < inputAnswers.length; i++) {
+                let answerText = re_text(String(inputAnswers[i]).replace(/【答案要点】/g, ''));
+                $emptyInput.eq(i).val(answerText); $emptyInput.change(); normalized.push(answerText);
+            }
+            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized.length > 0 ? normalized[0] : "");
+            return 220;
+        },
+        _answerChoicesQuestion() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $emptyInput = this.$questionNode.find('.cloze-input');
+            let inputAnswers = answerData.subQuestionAnswerDTOList, normalized = [];
+            for (let i = 0; i < inputAnswers.length; i++) {
+                let answerText = inputAnswers[i] && inputAnswers[i].correctAnswerList ? inputAnswers[i].correctAnswerList[0] : "";
+                $emptyInput.eq(i).val(answerText); $emptyInput.change();
+                let el = $emptyInput.eq(i).get(0);
+                if (el) { try { el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {} }
+                normalized.push(answerText);
+            }
+            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized);
+            return Math.max(220, normalized.length * 120 + 80);
+        },
+        _answerRankQuestion() {
+            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
+            let $emptyInput = this.$questionNode.find('.answer-blank'), inputAnswers = answerData.correctAnswerList;
+            for (let i = 0; i < inputAnswers.length; i++) { $emptyInput.eq(i).html(inputAnswers[i]); $emptyInput.change(); }
+            return 220;
+        },
+        _getAnswerData() {
+            let data = this._syncGetAnswer(); if (!data || typeof data !== "object") data = {};
+            if (!Array.isArray(data.correctAnswerList)) data.correctAnswerList = [];
+            if (!Array.isArray(data.subQuestionAnswerDTOList)) data.subQuestionAnswerDTOList = [];
+            if (data.correctAnswerList.length === 0 && this.questionModel && typeof this.questionModel.correctAnswer === "function") {
+                let koAns = this.questionModel.correctAnswer();
+                if (Array.isArray(koAns) && koAns.length > 0) data.correctAnswerList = koAns.map(x => String(x));
+                else if (typeof koAns === "string" && koAns.trim()) data.correctAnswerList = parseAnswerTextToArray(koAns);
+                else if (typeof koAns === "boolean") data.correctAnswerList = [koAns ? "true" : "false"];
+            }
+            if (data.correctAnswerList.length === 0) {
+                let domAnswerText = this.$questionNode.find('.correct-answer-area span:last-child').first().text().trim();
+                if (domAnswerText) {
+                    if (domAnswerText === "正确") data.correctAnswerList = ["true"];
+                    else if (domAnswerText === "错误") data.correctAnswerList = ["false"];
+                    else data.correctAnswerList = parseAnswerTextToArray(domAnswerText);
+                }
+            }
+            if (data.correctAnswerList.length === 0) return null;
+            return data;
+        },
+        _syncGetAnswer() {
+            let res_answer;
+            try {
+                let apiHost = (typeof CONFIG_API_HOST !== "undefined" && CONFIG_API_HOST) ? CONFIG_API_HOST : "https://api.ulearning.cn";
+                if (window.location.hostname.includes("dgut.edu.cn")) apiHost = "https://ua.dgut.edu.cn";
+                let reqUrl = apiHost + '/uaapi/questionAnswer/' + this.questionId;
+                if (!$) return res_answer;
+                $.ajax({ url: reqUrl, type: "GET", async: false, data: { parentId: this.parentId }, success: function (xhr) { res_answer = xhr; }, error: function () { debugLog("RespondentSyncError", "同步答案接口请求失败", { questionId: this.questionId }); }.bind(this) });
+            } catch (e) { debugLog("RespondentSyncError", "同步答案接口异常", e.message); }
+            return res_answer;
+        }
+    };
+
+    /* ==================== 模块 S3: 作业互评增强 ==================== */
     function peerRecords() { return GM_getValue(PEER_KEY, []) || []; }
     function peerSaveRecords(newRecords) {
         const all = peerRecords();
@@ -1265,7 +1705,6 @@
             gPeerInfoMap = {};
             uidList.forEach((uid, i) => { gPeerInfoMap[uid] = results[i].status === 'fulfilled' ? results[i].value : { name: '?', studentid: '?', className: '' }; });
             gPeerHwInfo = { hwList, peerList };
-            // 回填已存记录的评价人信息
             const all = peerRecords().map(r => { const u = gPeerInfoMap[r.reviewerId]; return u ? Object.assign({}, r, { reviewerName: u.name, reviewerSid: u.studentid, reviewerClassName: u.className }) : r; });
             GM_setValue(PEER_KEY, all);
             peerRenderList();
@@ -1310,8 +1749,7 @@
         ac.querySelector('#dgut-peer-clear').onclick = () => { if (confirm('确定清空所有互评记录？不可撤销。')) { GM_setValue(PEER_KEY, []); peerRenderList(); } };
     }
 
-    /* ==================== 模块 S4: 求是读书 ====================
-       在课件页按书目累计真实阅读时长（与服务端 KO 视图模型同步），满 4h10m 自动翻页/切书；阅读器子框架由父窗口 postMessage 驱动翻页。 */
+    /* ==================== 模块 S4: 求是读书 ==================== */
     const READ_MIN_SEC = 4 * 3600 + 10;
     const READ_NAV_SEC = 3;
     const READ_SAVE_INTERVAL = 30;
@@ -1384,7 +1822,6 @@
     function rdTick() {
         if (!gRead || !gRead.running) return;
         const vm = rdVm();
-        // 弹窗
         const modal = document.querySelector('.modal.fade.in');
         if (modal && pgVisible(modal)) { const b = modal.querySelector('.btn-submit'); if (b && pgVisible(b)) b.click(); return; }
         if (rdSolveChapterModal()) return;
@@ -1466,9 +1903,7 @@
         };
     }
 
-    /* ==================== 模块 S5: 文档工具（MD 转 Word/PDF + 手绘电子签名） ==================== */
-
-    // ---- Markdown 草稿与签名存储 ----
+    /* ==================== 模块 S5: 文档工具 ==================== */
     function getDocDraft() { return GM_getValue(DOC_DRAFT_KEY, ''); }
     function saveDocDraft(t) { GM_setValue(DOC_DRAFT_KEY, String(t || '')); }
     function getDocTitle() { return GM_getValue(DOC_TITLE_KEY, `文档_${dateKey()}`); }
@@ -1477,14 +1912,12 @@
     function addSignature(sig) { const l = getSignatures(); l.push(sig); GM_setValue(DOC_SIGN_KEY, l.slice(-30)); }
     function deleteSignature(id) { GM_setValue(DOC_SIGN_KEY, getSignatures().filter(s => String(s.id) !== String(id))); }
 
-    // ---- Markdown 渲染 ----
     function mdToHtml(md) {
         if (typeof marked === 'undefined') throw new Error('marked 库未加载');
         try { return marked.parse(String(md || '')); }
         catch (e) { throw new Error('Markdown 渲染失败：' + e.message); }
     }
 
-    // ---- 把 HTML 包成 Word 兼容文档（内联样式 + Office XML 命名空间） ----
     function wrapForWord(html, title, signatures = []) {
         const sigImgs = signatures.map(s => `
             <div style="margin-top:14pt;text-align:right;font-size:10pt;color:#49454E;">
@@ -1525,7 +1958,6 @@ ${sigImgs}
 </html>`;
     }
 
-    // ---- 导出 Word（.doc 以 HTML 内容承载，Word/WPS 均可打开） ----
     function exportMdToWord() {
         const md = document.getElementById('dgut-doc-md')?.value || '';
         if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
@@ -1545,7 +1977,6 @@ ${sigImgs}
         showStatus(`已导出 Word：${title}.doc（含 ${sigs.length} 个签名）`);
     }
 
-    // ---- 导出 PDF（打开打印视图，用户在打印对话框选择"另存为 PDF"） ----
     function exportMdToPdf() {
         const md = document.getElementById('dgut-doc-md')?.value || '';
         if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
@@ -1561,12 +1992,10 @@ ${sigImgs}
         win.document.open();
         win.document.write(fullHtml);
         win.document.close();
-        // 等字体/图片就绪再触发打印
         setTimeout(() => { try { win.focus(); win.print(); } catch (e) {} }, 600);
         showStatus('已打开打印视图：在打印对话框中选择"另存为 PDF"');
     }
 
-    // ---- 手绘签名画板 ----
     function createSignaturePad(canvas) {
         const ctx = canvas.getContext('2d');
         const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -1583,7 +2012,6 @@ ${sigImgs}
             ctx.strokeStyle = '#1D1B20';
         };
         resize();
-        // 保留已绘内容（resize 后重绘代价高，此处简单清空——首次调用时画布本来为空）
         let drawing = false, lastX = 0, lastY = 0;
         const pos = (e) => {
             const r = canvas.getBoundingClientRect();
@@ -1594,7 +2022,6 @@ ${sigImgs}
             e.preventDefault();
             drawing = true;
             const p = pos(e); lastX = p.x; lastY = p.y;
-            // 单点也画一个小圆，避免轻点无痕
             ctx.beginPath();
             ctx.arc(p.x, p.y, 1.2, 0, Math.PI * 2);
             ctx.fillStyle = '#1D1B20';
@@ -1633,7 +2060,6 @@ ${sigImgs}
         };
     }
 
-    // 取当前被勾选的签名
     function getPickedSignatures() {
         const picked = Array.from(document.querySelectorAll('.dgut-sig-pick:checked')).map(c => c.dataset.id);
         if (!picked.length) return [];
@@ -1641,7 +2067,6 @@ ${sigImgs}
         return all.filter(s => picked.includes(String(s.id)));
     }
 
-    // 渲染签名缩略图列表
     function renderSignatureList() {
         const el = document.getElementById('dgut-sig-list');
         if (!el) return;
@@ -1667,7 +2092,6 @@ ${sigImgs}
         });
     }
 
-    // 渲染文档工具主视图
     function renderDocToolView(ac) {
         const draft = getDocDraft();
         const title = getDocTitle();
@@ -1706,10 +2130,8 @@ ${sigImgs}
         const titleEl = ac.querySelector('#dgut-doc-title');
         const previewBox = ac.querySelector('#dgut-doc-preview-box');
         const pad = createSignaturePad(ac.querySelector('#dgut-sig-canvas'));
-        // 记录草稿
         mdEl.addEventListener('input', () => saveDocDraft(mdEl.value));
         titleEl.addEventListener('input', () => saveDocTitle(titleEl.value));
-        // 预览
         ac.querySelector('#dgut-doc-preview').onclick = () => {
             const md = mdEl.value;
             if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
@@ -1728,7 +2150,6 @@ ${sigImgs}
             previewBox.style.display = 'none';
             previewBox.innerHTML = '';
         };
-        // 签名
         ac.querySelector('#dgut-sig-clear').onclick = () => pad.clear();
         ac.querySelector('#dgut-sig-save').onclick = () => {
             if (pad.isEmpty()) { showStatus('画板为空，请先手写签名', true); return; }
@@ -1742,7 +2163,7 @@ ${sigImgs}
         renderSignatureList();
     }
 
-    /* ==================== 模块 8: 主面板 UI（PC 适配 + 悬浮迷你面板） ==================== */
+    /* ==================== 模块 8: 主面板 UI ==================== */
     let gActionName = null;
     const ACTION_TITLES = {
         sign: '优学院课程签到',
@@ -1791,7 +2212,6 @@ ${sigImgs}
         }
     }
 
-    // ---------- 外观设置页 ----------
     function renderAppearanceView(ac) {
         const mode = GM_getValue(THEME_MODE_KEY, 'auto');
         const accent = GM_getValue(ACCENT_KEY, 'purple');
@@ -1826,8 +2246,7 @@ ${sigImgs}
         };
     }
 
-    // ---------- 关于与帮助页 ----------
-    const ABOUT_VERSION = 'v5.0.1';
+    const ABOUT_VERSION = 'v5.0.3';
     function renderAboutView(ac) {
         const code = (s) => `<span style="font-family:Consolas,monospace;background:#F3EDF7;padding:1px 5px;border-radius:4px;font-size:11px;color:#6750A4;">${s}</span>`;
         ac.innerHTML = actionHeader(ACTION_TITLES.about) + `
@@ -1839,32 +2258,10 @@ ${sigImgs}
                         <div style="font-size:12px;color:#49454E;">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
                     </div>
                 </div>
-                <p style="margin:10px 0 0;font-size:12px;color:#49454E;line-height:1.7;">面向东莞理工学院优学院平台的浏览器增强脚本：读取课程、轮询当日课堂活动并自动签到；课件页倍速守卫与自动答题、题库收集；作业互评记录去匿名化汇总；求是读书时长统计与自动翻页。另附文档工具：Markdown 一键转 Word/PDF、手绘电子签名。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
-            </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:8px;">开源许可 · AGPL-3.0-only（最严格的开源协议）</div>
-                <div style="font-size:12px;color:#49454E;line-height:1.8;">
-                    本脚本以 GNU Affero General Public License v3.0 发布。核心义务：<br>
-                    ① 强传染性 copyleft：任何修改版/衍生版都必须以同样协议开源；<br>
-                    ② 网络服务条款：即使仅通过网络向用户提供本脚本（含修改版），也必须向使用者提供完整源代码；<br>
-                    ③ 专利授权：贡献者自动授予专利许可；<br>
-                    ④ 无担保：软件按"原样"提供，作者不承担任何使用后果。<br>
-                    违反上述条款将自动终止授权。完整条款见 https://www.gnu.org/licenses/agpl-3.0.html
-                </div>
-            </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:8px;">功能说明</div>
-                <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">课程签到</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">读取课程、轮询当日课堂活动并自动签到（数字码/一键签到可直接完成；二维码签到仅当活动数据自带签到码时处理）</td></tr>
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">刷课助手</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">倍速守卫、自动答题（视图模型/题库/接口三种答案源）、弹窗处理、自动翻页、题库收集导出</td></tr>
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">作业互评</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">读取互评接口、去匿名化评价人、记录汇总与筛选</td></tr>
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">求是读书</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">服务端时长同步、满 4h10m 自动翻页/切书、阅读器 iframe 自动翻页</td></tr>
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">文档工具</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">Markdown 转 Word（.doc）/ PDF（打印视图）；手绘电子签名，可附加到导出文档末尾</td></tr>
-                    <tr><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;white-space:nowrap;color:#6750A4;font-weight:600;">外观设置</td><td style="padding:5px 8px;border-bottom:1px solid #F0EBF5;color:#49454E;">主题模式（亮色/暗色/跟随系统）与主体色（预设 + 自定义）</td></tr>
-                </table>
+                <p style="margin:10px 0 0;font-size:12px;color:#49454E;line-height:1.7;">面向东莞理工学院优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
             </div>
             <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:14px 16px;font-size:12px;color:#4A4458;line-height:1.8;">
-                <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片（二维码签到仅当活动数据自带签到码时才处理）；刷课自动答题的未知题型一律跳过，平台测验多为"限答1次"；脚本仅申请通知权限用于本地提醒，文档工具的全部处理均在浏览器本地完成。
+                <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片；刷课自动答题的未知题型一律跳过；文档工具的全部处理均在浏览器本地完成。
             </div>`;
     }
 
@@ -1940,7 +2337,6 @@ ${sigImgs}
             t.classList.add('dgut-tab-active');
             renderActionView(t.dataset.action);
         });
-        // 初始视图
         const mode = GM_getValue(VIEW_MODE_KEY, 'sign');
         gActionName = mode;
         panel.querySelectorAll('.dgut-nav').forEach(x => x.classList.toggle('dgut-tab-active', x.dataset.action === mode));
@@ -2036,7 +2432,6 @@ ${sigImgs}
         GM_registerMenuCommand('文档工具（MD→Word/PDF + 电子签名）', () => openActionView('doc'));
         GM_registerMenuCommand('外观设置（主题/主体色）', () => openActionView('appearance'));
 
-        // 全局常驻悬浮面板；若此前面板为展开状态则恢复，避免刷新后"不见"
         createMiniPanel();
         if (GM_getValue(PANEL_OPEN_KEY, false)) createPanel();
     }
