@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.0.3
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF + 手绘电子签名。
+// @version      5.1.1
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF + 手绘电子签名。主题变量统一挂 :root，暗色模式底色真正生效。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -110,93 +110,202 @@
     const log = (...a) => { if (DEBUG) console.log(TAG, ...a); };
     if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
+    /* ============================================================
+     * 主题系统（v5.1.1：变量统一挂 :root，面板不再重复定义）
+     * ============================================================ */
+
     const ACCENTS = {
-        purple: { name: '紫罗兰', primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D', dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF' },
-        blue: { name: '蔚蓝', primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36', dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF' },
-        teal: { name: '松石', primary: '#006874', container: '#97F0FF', onContainer: '#001F24', dPrimary: '#4FD8EB', dContainer: '#004F59', dOnContainer: '#97F0FF' },
-        green: { name: '青绿', primary: '#00696D', container: '#CCE8E7', onContainer: '#002020', dPrimary: '#80D5D4', dContainer: '#004F51', dOnContainer: '#CCE8E7' },
-        orange: { name: '琥珀', primary: '#8B5000', container: '#FFDDB8', onContainer: '#2D1600', dPrimary: '#FFB870', dContainer: '#6A3C00', dOnContainer: '#FFDDB8' },
-        red: { name: '玫红', primary: '#A03253', container: '#FFD9E1', onContainer: '#3E001D', dPrimary: '#FFB1C6', dContainer: '#7D2948', dOnContainer: '#FFD9E1' }
+        purple: {
+            name: '紫罗兰',
+            primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D',
+            dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF',
+            hover: '#57418C', dHover: '#DCC9FF'
+        },
+        blue: {
+            name: '蔚蓝',
+            primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36',
+            dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF',
+            hover: '#00528C', dHover: '#B7D8FF'
+        },
+        teal: {
+            name: '松石',
+            primary: '#006874', container: '#97F0FF', onContainer: '#001F24',
+            dPrimary: '#4FD8EB', dContainer: '#004F59', dOnContainer: '#97F0FF',
+            hover: '#005862', dHover: '#83E4F4'
+        },
+        green: {
+            name: '青绿',
+            primary: '#00696D', container: '#CCE8E7', onContainer: '#002020',
+            dPrimary: '#80D5D4', dContainer: '#004F51', dOnContainer: '#CCE8E7',
+            hover: '#005A5D', dHover: '#A2E0E0'
+        },
+        orange: {
+            name: '琥珀',
+            primary: '#8B5000', container: '#FFDDB8', onContainer: '#2D1600',
+            dPrimary: '#FFB870', dContainer: '#6A3C00', dOnContainer: '#FFDDB8',
+            hover: '#7A4700', dHover: '#FFCB92'
+        },
+        red: {
+            name: '玫红',
+            primary: '#A03253', container: '#FFD9E1', onContainer: '#3E001D',
+            dPrimary: '#FFB1C6', dContainer: '#7D2948', dOnContainer: '#FFD9E1',
+            hover: '#8B2C48', dHover: '#FFC6D6'
+        }
     };
+
     function resolvedThemeMode() {
         const m = GM_getValue(THEME_MODE_KEY, 'auto');
         if (!m || m === 'auto') return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
         return m === 'dark' ? 'dark' : 'light';
     }
+
     function accentOf(id) {
         if (ACCENTS[id]) return ACCENTS[id];
         const hex = /^#([0-9a-f]{6})$/i.test(String(id)) ? id : '#6750A4';
         return {
-            name: '自定义', primary: hex,
-            container: `color-mix(in srgb, ${hex} 18%, #ffffff)`, onContainer: '#21005D',
-            dPrimary: hex, dContainer: `color-mix(in srgb, ${hex} 30%, #141218)`, dOnContainer: '#EADDFF'
+            name: '自定义',
+            primary: hex,
+            container: `color-mix(in srgb, ${hex} 18%, #ffffff)`,
+            onContainer: `color-mix(in srgb, ${hex} 70%, #000000)`,
+            dPrimary: `color-mix(in srgb, ${hex} 62%, #ffffff)`,
+            dContainer: `color-mix(in srgb, ${hex} 42%, #141218)`,
+            dOnContainer: `color-mix(in srgb, ${hex} 30%, #ffffff)`,
+            hover: `color-mix(in srgb, ${hex} 85%, #000000)`,
+            dHover: `color-mix(in srgb, ${hex} 78%, #ffffff)`
         };
     }
+
     function themeTokens() {
         const dark = resolvedThemeMode() === 'dark';
         const a = accentOf(GM_getValue(ACCENT_KEY, 'purple'));
-        const base = dark ? {
-            surface: '#141218', surface2: '#211F26', onSurface: '#E6E0E9', onSurfaceVariant: '#CAC4D0',
-            outline: '#938F99', outlineVariant: '#49454E', secondary: '#4A4458', onSecondary: '#E8DEF8',
-            error: '#F2B8B5', success: '#A5D6A7', onPrimary: '#381E72'
-        } : {
-            surface: '#FEF7FF', surface2: '#F7F2FA', onSurface: '#1D1B20', onSurfaceVariant: '#49454E',
-            outline: '#CAC4D0', outlineVariant: '#E7E0EC', secondary: '#F3EDF7', onSecondary: '#1D192B',
-            error: '#B3261E', success: '#2E7D32', onPrimary: '#FFFFFF'
+
+        const light = {
+            surface: '#FEF7FF',
+            surface2: '#F7F2FA',
+            surface3: '#FFFFFF',
+            onSurface: '#1D1B20',
+            onSurfaceVariant: '#49454E',
+            outline: '#79747E',
+            outlineVariant: '#E7E0EC',
+            secondaryContainer: '#F3EDF7',
+            onSecondaryContainer: '#1D192B',
+            error: '#B3261E',
+            errorContainer: '#FFEBEE',
+            onErrorContainer: '#721C24',
+            success: '#2E7D32',
+            successContainer: '#E8F5E9',
+            onSuccessContainer: '#1B5E20',
+            warn: '#8B5000',
+            warnContainer: '#FFF3E0',
+            onWarnContainer: '#7A4400',
+            inputBg: '#F3EDF7',
+            hoverOverlay: 'rgba(0,0,0,.04)',
+            onPrimary: '#FFFFFF'
         };
+        const darkBase = {
+            surface: '#141218',      // 主基调：深黑
+            surface2: '#1F1D24',
+            surface3: '#2B2930',
+            onSurface: '#E6E0E9',
+            onSurfaceVariant: '#CAC4D0',
+            outline: '#938F99',
+            outlineVariant: '#49454E',
+            secondaryContainer: '#4A4458',
+            onSecondaryContainer: '#E8DEF8',
+            error: '#F2B8B5',
+            errorContainer: '#8C1D18',
+            onErrorContainer: '#F9DEDC',
+            success: '#A5D6A7',
+            successContainer: '#1B4D22',
+            onSuccessContainer: '#B8E5BA',
+            warn: '#FFB870',
+            warnContainer: '#5C3600',
+            onWarnContainer: '#FFDDB8',
+            inputBg: '#1F1D24',
+            hoverOverlay: 'rgba(255,255,255,.06)',
+            onPrimary: '#21005D'
+        };
+
+        const base = dark ? darkBase : light;
+
+        const infoContainer = dark
+            ? `color-mix(in srgb, ${a.dContainer} 60%, ${base.surface})`
+            : `color-mix(in srgb, ${a.container} 62%, ${base.surface3})`;
+        const onInfoContainer = dark ? a.dOnContainer : a.onContainer;
+
         return Object.assign(base, {
             primary: dark ? a.dPrimary : a.primary,
+            primaryHover: dark ? a.dHover : a.hover,
             container: dark ? a.dContainer : a.container,
-            onContainer: dark ? a.dOnContainer : a.onContainer
+            onContainer: dark ? a.dOnContainer : a.onContainer,
+            infoContainer,
+            onInfoContainer
         });
     }
+
+    /**
+     * 把 token 写到 :root（即 <html>），所有面板/悬浮球/Toast 都从这里继承。
+     * 面板自身不再重复定义任何 --dgut-* 变量，避免选择器优先级覆盖主题。
+     */
     function applyTheme() {
         const dark = resolvedThemeMode() === 'dark';
         const t = themeTokens();
         document.documentElement.classList.toggle('dgut-theme-dark', dark);
+
         let style = document.getElementById('dgut-theme-style');
         if (!style) { style = document.createElement('style'); style.id = 'dgut-theme-style'; document.head.appendChild(style); }
-        const darkOverrides = dark ? `
-            #dgut-main-panel, #dgut-mini-panel { color-scheme: dark; }
-            #dgut-main-panel select option { background:${t.surface2}; color:${t.onSurface}; }
-            #dgut-main-panel [style*="background:#fff"],
-            #dgut-main-panel [style*="background:#FFF"],
-            #dgut-main-panel [style*="background:#FEF7FF"],
-            #dgut-main-panel [style*="background:#F7F2FA"],
-            #dgut-main-panel [style*="background:#F6F1FB"],
-            #dgut-main-panel [style*="background:#F3EDF7"]{background:${t.surface2} !important;}
-            #dgut-main-panel [style*="background:#E7E0EC"]{background:${t.outlineVariant} !important;}
-            #dgut-main-panel [style*="background:#E8DEF8"]{background:${t.container} !important;}
-            #dgut-main-panel [style*="background:#FFEBEE"]{background:#5C1A16 !important;}
-            #dgut-main-panel [style*="background:#E8F5E9"]{background:#1B3A1D !important;}
-            #dgut-main-panel [style*="background:#FFF3E0"]{background:#3A2E16 !important;}
-            #dgut-main-panel [style*="background:#FBEAF9"]{background:#3A2A38 !important;}
-            #dgut-main-panel [style*="color:#1D1B20"]:not([style*="linear-gradient"]){color:${t.onSurface} !important;}
-            #dgut-main-panel [style*="color:#49454E"]:not([style*="linear-gradient"]){color:${t.onSurfaceVariant} !important;}
-            #dgut-main-panel [style*="color:#79747E"]:not([style*="linear-gradient"]){color:${t.outline} !important;}
-            #dgut-main-panel [style*="color:#6750A4"]:not([style*="linear-gradient"]){color:${t.primary} !important;}
-            #dgut-main-panel [style*="color:#721C24"]:not([style*="linear-gradient"]){color:#F2B8B5 !important;}
-            #dgut-main-panel [style*="color:#2E7D32"]:not([style*="linear-gradient"]){color:#A5D6A7 !important;}
-            #dgut-main-panel [style*="color:#B3261E"]:not([style*="linear-gradient"]){color:#F2B8B5 !important;}
-            #dgut-main-panel [style*="border:1px solid #E7E0EC"]:not([style*="linear-gradient"]){border-color:${t.outlineVariant} !important;}
-            #dgut-main-panel [style*="border:1px solid #CAC4D0"]:not([style*="linear-gradient"]){border-color:${t.outline} !important;}
-            #dgut-main-panel input, #dgut-main-panel select, #dgut-main-panel textarea { color:${t.onSurface}; }
-            #dgut-main-panel input::placeholder, #dgut-main-panel textarea::placeholder { color:${t.outline}; }
-            #dgut-mini-panel { background:${t.surface2} !important; border-color:${t.primary} !important; }
-        ` : '';
+
         style.textContent = `
-            #dgut-main-panel, #dgut-mini-panel {
-                --dgut-primary:${t.primary};--dgut-on-primary:${t.onPrimary};
-                --dgut-primary-container:${t.container};--dgut-on-primary-container:${t.onContainer};
-                --dgut-secondary-container:${t.secondary};--dgut-on-secondary-container:${t.onSecondary};
-                --dgut-surface:${t.surface};--dgut-surface-2:${t.surface2};
-                --dgut-on-surface:${t.onSurface};--dgut-on-surface-variant:${t.onSurfaceVariant};
-                --dgut-outline:${t.outline};--dgut-outline-variant:${t.outlineVariant};
-                --dgut-error:${t.error};--dgut-success:${t.success};
+            :root, html.dgut-theme-dark {
+                --dgut-primary: ${t.primary};
+                --dgut-primary-hover: ${t.primaryHover};
+                --dgut-on-primary: ${t.onPrimary};
+                --dgut-primary-container: ${t.container};
+                --dgut-on-primary-container: ${t.onContainer};
+                --dgut-secondary-container: ${t.secondaryContainer};
+                --dgut-on-secondary-container: ${t.onSecondaryContainer};
+                --dgut-surface: ${t.surface};
+                --dgut-surface-2: ${t.surface2};
+                --dgut-surface-3: ${t.surface3};
+                --dgut-on-surface: ${t.onSurface};
+                --dgut-on-surface-variant: ${t.onSurfaceVariant};
+                --dgut-outline: ${t.outline};
+                --dgut-outline-variant: ${t.outlineVariant};
+                --dgut-error: ${t.error};
+                --dgut-error-container: ${t.errorContainer};
+                --dgut-on-error-container: ${t.onErrorContainer};
+                --dgut-success: ${t.success};
+                --dgut-success-container: ${t.successContainer};
+                --dgut-on-success-container: ${t.onSuccessContainer};
+                --dgut-warn: ${t.warn};
+                --dgut-warn-container: ${t.warnContainer};
+                --dgut-on-warn-container: ${t.onWarnContainer};
+                --dgut-info-container: ${t.infoContainer};
+                --dgut-on-info-container: ${t.onInfoContainer};
+                --dgut-input-bg: ${t.inputBg};
+                --dgut-hover-overlay: ${t.hoverOverlay};
+                --dgut-font: "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+                --dgut-color-scheme: ${dark ? 'dark' : 'light'};
             }
-            ${darkOverrides}
+            #dgut-main-panel, #dgut-mini-panel, #dgut-toast-card { color-scheme: var(--dgut-color-scheme); }
+            #dgut-main-panel select option { background: var(--dgut-surface-3); color: var(--dgut-on-surface); }
+            #dgut-main-panel input[type="color"] {
+                background: var(--dgut-input-bg);
+                border: 1px solid var(--dgut-outline);
+                border-radius: 8px;
+                padding: 2px;
+            }
+            #dgut-main-panel ::-webkit-scrollbar { width: 10px; height: 10px; }
+            #dgut-main-panel ::-webkit-scrollbar-track { background: transparent; }
+            #dgut-main-panel ::-webkit-scrollbar-thumb {
+                background: var(--dgut-outline-variant);
+                border-radius: 6px;
+                border: 2px solid var(--dgut-surface);
+            }
+            #dgut-main-panel ::-webkit-scrollbar-thumb:hover { background: var(--dgut-outline); }
         `;
     }
+
     function initThemeWatcher() {
         applyTheme();
         try {
@@ -220,12 +329,12 @@
         const d = new Date(date);
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
+
     function showStatus(msg, isError = false) {
         const el = document.getElementById('dgut-status-bar');
         if (!el) return;
         el.textContent = msg;
-        el.style.color = isError ? '#B3261E' : '#49454E';
-        el.style.background = isError ? '#FFEBEE' : '#F3EDF7';
+        el.classList.toggle('dgut-status-error', !!isError);
         el.style.display = 'block';
         clearTimeout(el._timer);
         el._timer = setTimeout(() => { el.style.display = 'none'; }, 5000);
@@ -240,8 +349,7 @@
             const msg = secs < 1 ? `${baseText}…` : `${baseText}…（已等待 ${secs} 秒）`;
             if (el) {
                 el.textContent = msg;
-                el.style.color = '#49454E';
-                el.style.background = '#F3EDF7';
+                el.classList.remove('dgut-status-error');
                 el.style.display = 'block';
             }
         };
@@ -270,46 +378,354 @@
         sign2: `<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>`
     };
 
+    /* ---------- 全局静态样式：不再重复定义 --dgut-* 变量！ ---------- */
     GM_addStyle(`
         @keyframes dgutPulse {0%,100%{filter:brightness(1)}50%{filter:brightness(1.15)}}
         @keyframes dgutDown {from{transform:translate(-50%,-120%);opacity:0}to{transform:translate(-50%,0);opacity:1}}
         @keyframes dgutShrinkX {from{transform:scaleX(1)}to{transform:scaleX(0)}}
 
-        #dgut-main-panel, #dgut-mini-panel {
-            --dgut-primary: #6750A4; --dgut-on-primary: #fff;
-            --dgut-primary-container: #E8DEF8; --dgut-on-primary-container: #21005D;
-            --dgut-secondary-container: #F3EDF7; --dgut-on-secondary-container: #1D192B;
-            --dgut-surface: #FEF7FF; --dgut-surface-2: #F7F2FA;
-            --dgut-on-surface: #1D1B20; --dgut-on-surface-variant: #49454E;
-            --dgut-outline: #CAC4D0; --dgut-outline-variant: #E7E0EC;
-            --dgut-error: #B3261E; --dgut-success: #2E7D32;
-            --dgut-font: "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+        /* ---------- 通用组件 ---------- */
+        .dgut-card {
+            background: var(--dgut-surface-3);
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 12px;
+            color: var(--dgut-on-surface);
+            transition: background .15s, border-color .15s;
         }
+        .dgut-card--tight { padding: 12px; }
+        .dgut-card:last-child { margin-bottom: 0; }
+
+        .dgut-hint {
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 12px;
+            padding: 10px 14px;
+            font-size: 12px;
+            line-height: 1.7;
+            background: var(--dgut-info-container);
+            color: var(--dgut-on-info-container);
+            margin-bottom: 12px;
+        }
+        .dgut-hint--info { background: var(--dgut-info-container); color: var(--dgut-on-info-container); }
+        .dgut-hint--success { background: var(--dgut-success-container); color: var(--dgut-on-success-container); }
+        .dgut-hint--warn { background: var(--dgut-warn-container); color: var(--dgut-on-warn-container); }
+        .dgut-hint--error { background: var(--dgut-error-container); color: var(--dgut-on-error-container); }
+        .dgut-hint b { color: inherit; }
+        .dgut-hint code {
+            font-family: Consolas, "Courier New", monospace;
+            background: var(--dgut-hover-overlay);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .dgut-section-title {
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: var(--dgut-on-surface);
+        }
+
+        .dgut-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .dgut-row--end { justify-content: flex-end; }
+        .dgut-row--mb { margin-bottom: 10px; }
+
+        .dgut-label {
+            font-size: 13px;
+            color: var(--dgut-on-surface-variant);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .dgut-label input[type="checkbox"] { accent-color: var(--dgut-primary); }
+
+        .dgut-input, .dgut-textarea, .dgut-select {
+            padding: 8px 12px;
+            border: 1px solid var(--dgut-outline);
+            border-radius: 10px;
+            background: var(--dgut-input-bg);
+            color: var(--dgut-on-surface);
+            font-size: 13px;
+            outline: none;
+            box-sizing: border-box;
+            font-family: inherit;
+            transition: border-color .15s, background .15s;
+        }
+        .dgut-input:focus, .dgut-textarea:focus, .dgut-select:focus { border-color: var(--dgut-primary); }
+        .dgut-input::placeholder, .dgut-textarea::placeholder { color: var(--dgut-outline); }
+
+        .dgut-log {
+            max-height: 240px;
+            overflow-y: auto;
+            font-size: 12px;
+            background: var(--dgut-surface-2);
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 10px;
+            padding: 8px 10px;
+            color: var(--dgut-on-surface);
+            line-height: 1.7;
+        }
+        .dgut-log-line { line-height: 1.7; word-break: break-all; }
+        .dgut-log-line.log-success { color: var(--dgut-success); }
+        .dgut-log-line.log-warn { color: var(--dgut-error); }
+        .dgut-log-line.log-muted { color: var(--dgut-on-surface-variant); }
+        .dgut-log-line.log-info { color: var(--dgut-on-surface); }
+
+        /* ---------- 按钮 ---------- */
+        .dgut-btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+            padding: 7px 13px; border: none; border-radius: 999px;
+            background: var(--dgut-secondary-container); color: var(--dgut-on-secondary-container);
+            font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+            transition: background .15s, color .15s, box-shadow .15s;
+            font-family: inherit;
+        }
+        .dgut-btn:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
+        .dgut-btn-primary { background: var(--dgut-primary); color: var(--dgut-on-primary); }
+        .dgut-btn-primary:hover { background: var(--dgut-primary-hover); color: var(--dgut-on-primary); }
+        .dgut-btn svg, .dgut-ico svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+
+        /* ---------- 导航 ---------- */
         .dgut-nav {
             display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
             padding: 9px 10px; border: none; border-radius: 10px; background: transparent;
             font-size: 12px; font-weight: 500; color: var(--dgut-on-surface-variant);
             cursor: pointer; user-select: none; text-align: left; white-space: nowrap;
             transition: background .15s, color .15s;
+            font-family: inherit;
         }
         .dgut-nav svg { width: 16px; height: 16px; fill: currentColor; flex: none; }
         .dgut-nav:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
         .dgut-nav.dgut-tab-active { background: var(--dgut-primary-container); color: var(--dgut-primary); font-weight: 700; }
         .dgut-nav-label {
-            font-size: 10px; font-weight: 700; color: var(--dgut-outline,#CAC4D0);
+            font-size: 10px; font-weight: 700; color: var(--dgut-outline);
             letter-spacing: .6px; padding: 12px 10px 4px; user-select: none;
         }
-        .dgut-btn {
-            display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-            padding: 7px 13px; border: none; border-radius: 999px;
-            background: var(--dgut-secondary-container); color: var(--dgut-on-surface-variant);
-            font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
-            transition: background .15s, color .15s, box-shadow .15s;
+
+        /* ---------- 状态条 ---------- */
+        #dgut-status-bar {
+            padding: 6px 12px; font-size: 11px;
+            border-top: 1px solid var(--dgut-outline-variant);
+            background: var(--dgut-surface-2);
+            color: var(--dgut-on-surface-variant);
         }
-        .dgut-btn:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
-        .dgut-btn-primary { background: var(--dgut-primary); color: var(--dgut-on-primary); }
-        .dgut-btn-primary:hover { background: #58418E; color: #fff; }
-        .dgut-btn svg, .dgut-ico svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+        #dgut-status-bar.dgut-status-error {
+            color: var(--dgut-error);
+            background: var(--dgut-error-container);
+        }
+
+        /* ---------- 签到课程列表 ---------- */
+        #dgut-sign-courses, .dgut-list-box {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .dgut-sign-course {
+            display: block; width: 100%; text-align: left; margin-bottom: 4px;
+            padding: 8px 10px;
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 10px;
+            background: var(--dgut-surface-3);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--dgut-on-surface);
+            font-family: inherit;
+            transition: background .15s, border-color .15s, color .15s;
+        }
+        .dgut-sign-course:hover { background: var(--dgut-secondary-container); }
+        .dgut-sign-course.active {
+            border-color: var(--dgut-primary);
+            background: var(--dgut-primary-container);
+            color: var(--dgut-on-primary-container);
+        }
+        .dgut-sign-course .course-meta {
+            color: var(--dgut-on-surface-variant);
+            font-size: 11px;
+            margin-left: 6px;
+        }
+        .dgut-sign-course.active .course-meta { color: var(--dgut-on-primary-container); opacity: .8; }
+
+        /* ---------- 互评卡片 ---------- */
+        .dgut-peer-card {
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 10px;
+            background: var(--dgut-surface-2);
+            color: var(--dgut-on-surface);
+            border: 1px solid var(--dgut-outline-variant);
+        }
+        .dgut-peer-card.peer-low {
+            background: color-mix(in srgb, var(--dgut-error) 14%, var(--dgut-surface-3));
+            border-color: color-mix(in srgb, var(--dgut-error) 30%, var(--dgut-outline-variant));
+        }
+        .dgut-peer-card.peer-mid {
+            background: color-mix(in srgb, var(--dgut-warn) 16%, var(--dgut-surface-3));
+            border-color: color-mix(in srgb, var(--dgut-warn) 30%, var(--dgut-outline-variant));
+        }
+        .dgut-peer-card.peer-high {
+            background: color-mix(in srgb, var(--dgut-success) 12%, var(--dgut-surface-3));
+            border-color: color-mix(in srgb, var(--dgut-success) 26%, var(--dgut-outline-variant));
+        }
+        .dgut-peer-card .peer-name { font-size: 15px; font-weight: 600; }
+        .dgut-peer-card .peer-score { font-size: 15px; font-weight: 600; }
+        .dgut-peer-card .peer-hw { font-size: 12px; opacity: .85; margin: 4px 0 6px; }
+        .dgut-peer-card .peer-content { font-size: 13px; line-height: 1.4; margin-bottom: 6px; }
+        .dgut-peer-card .peer-foot {
+            font-size: 11px; opacity: .7;
+            border-top: 1px solid var(--dgut-hover-overlay);
+            padding-top: 5px;
+            display: flex; justify-content: space-between;
+        }
+
+        /* ---------- Toast ---------- */
+        #dgut-toast-card {
+            position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+            z-index: 2147483645;
+            min-width: 340px; max-width: 92vw;
+            background: var(--dgut-surface-3);
+            color: var(--dgut-on-surface);
+            padding: 16px 20px 20px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,.45);
+            font-family: var(--dgut-font);
+            cursor: pointer;
+            border-left: 6px solid var(--dgut-primary);
+            animation: dgutDown .35s cubic-bezier(.2,.8,.2,1);
+            overflow: hidden;
+        }
+        .dgut-toast-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+        .dgut-toast-body { font-size: 14px; color: var(--dgut-on-surface-variant); line-height: 1.5; }
+        .dgut-toast-sub { font-size: 12px; color: var(--dgut-outline); margin-top: 6px; }
+        .dgut-toast-progress {
+            position: absolute; left: 0; bottom: 0; height: 3px;
+            background: var(--dgut-primary);
+            width: 100%; transform-origin: left;
+            animation: dgutShrinkX linear forwards;
+        }
+
+        /* ---------- 签名列表 ---------- */
+        .dgut-sig-card {
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 10px;
+            padding: 6px;
+            background: var(--dgut-surface-2);
+            display: flex; flex-direction: column; gap: 4px;
+            width: 150px; box-sizing: border-box;
+        }
+        .dgut-sig-card img {
+            width: 100%; height: 56px; object-fit: contain;
+            background: #fff;
+            border-radius: 6px;
+        }
+        .dgut-sig-card .dgut-sig-meta {
+            font-size: 11px; color: var(--dgut-on-surface-variant);
+            display: flex; align-items: center; gap: 6px;
+        }
+        .dgut-sig-del {
+            cursor: pointer;
+            color: var(--dgut-error);
+            font-weight: 700; font-size: 14px; line-height: 1;
+        }
+
+        /* ---------- 文档预览 ---------- */
+        #dgut-doc-preview-box {
+            margin-top: 10px; padding: 12px 14px;
+            background: var(--dgut-surface-2);
+            border: 1px solid var(--dgut-outline-variant);
+            border-radius: 10px;
+            font-size: 13px; line-height: 1.7;
+            max-height: 340px; overflow: auto;
+            color: var(--dgut-on-surface);
+        }
+        #dgut-doc-preview-box pre,
+        #dgut-doc-preview-box code {
+            background: var(--dgut-hover-overlay);
+            padding: 2px 6px; border-radius: 4px;
+        }
+
+        /* ---------- 画板 ---------- */
+        #dgut-sig-canvas {
+            width: 100%; height: 180px;
+            background: var(--dgut-surface-3);
+            border: 2px dashed var(--dgut-outline);
+            border-radius: 10px;
+            touch-action: none; display: block; cursor: crosshair;
+            box-sizing: border-box;
+        }
+
+        /* ---------- 迷你悬浮面板 ---------- */
+        #dgut-mini-panel {
+            position: fixed;
+            z-index: 2147483001;
+            width: 80px; height: 80px;
+            border-radius: 18px;
+            background: var(--dgut-surface-3);
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; user-select: none;
+            border: 2px solid var(--dgut-primary-container);
+            box-shadow: 0 2px 10px rgba(0,0,0,.15);
+            transition: box-shadow .2s, transform .2s, border-color .2s, background .2s;
+        }
+        #dgut-mini-panel svg { display: block; }
+        #dgut-mini-panel .mini-ring { stroke: var(--dgut-primary); }
+        #dgut-mini-panel .mini-check { stroke: var(--dgut-primary); }
+        #dgut-mini-panel:hover {
+            box-shadow: 0 4px 16px color-mix(in srgb, var(--dgut-primary) 40%, transparent);
+            transform: scale(1.06);
+        }
+
+        /* ---------- 主面板框架 ---------- */
+        #dgut-main-panel {
+            position: fixed; z-index: 2147483000;
+            width: 780px; max-width: 98vw;
+            background: var(--dgut-surface);
+            color: var(--dgut-on-surface);
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,.35);
+            font-family: var(--dgut-font);
+            overflow: hidden;
+            border: 1px solid var(--dgut-outline-variant);
+            display: flex; flex-direction: column;
+        }
+        #dgut-panel-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 14px;
+            background: var(--dgut-primary);
+            color: var(--dgut-on-primary);
+            cursor: move; user-select: none;
+        }
+        #dgut-panel-header .panel-title { font-size: 14px; font-weight: 700; line-height: 1.25; }
+        #dgut-panel-close {
+            border: none;
+            background: color-mix(in srgb, var(--dgut-on-primary) 20%, transparent);
+            color: var(--dgut-on-primary);
+            width: 30px; height: 30px; border-radius: 50%;
+            font-size: 17px; line-height: 1; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            flex: none; transition: background .15s;
+            font-family: inherit;
+        }
+        #dgut-panel-close:hover { background: color-mix(in srgb, var(--dgut-on-primary) 32%, transparent); }
+        #dgut-sidebar {
+            width: 158px; flex: none;
+            background: var(--dgut-surface-2);
+            border-right: 1px solid var(--dgut-outline-variant);
+            padding: 10px 8px;
+            display: flex; flex-direction: column; gap: 2px;
+            overflow-y: auto;
+        }
+        #dgut-panel-body {
+            flex: 1; min-width: 0;
+            overflow-y: auto;
+            padding: 10px 12px;
+            max-height: 72vh;
+            background: var(--dgut-surface);
+        }
+        #dgut-panel-footer-version {
+            font-size: 10px;
+            color: var(--dgut-on-surface-variant);
+            text-align: center; padding: 6px 0; opacity: .7;
+        }
     `);
 
     let gAudioCtx = null;
@@ -351,12 +767,11 @@
         document.getElementById('dgut-toast-card')?.remove();
         const card = document.createElement('div');
         card.id = 'dgut-toast-card';
-        card.style.cssText = `position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:2147483645;min-width:340px;max-width:92vw;background:#1D1B20;color:#fff;padding:16px 20px 20px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.45);font-family:"Segoe UI",Roboto,sans-serif;cursor:pointer;border-left:6px solid #6750A4;animation:dgutDown .35s cubic-bezier(.2,.8,.2,1);overflow:hidden;`;
         card.innerHTML = `
-            <div style="font-size:16px;font-weight:600;margin-bottom:4px;">${escapeHtml(title)}</div>
-            <div style="font-size:14px;color:#E6E0E9;line-height:1.5;">${escapeHtml(body)}</div>
-            ${subtext ? `<div style="font-size:12px;color:#CAC4D0;margin-top:6px;">${escapeHtml(subtext)}</div>` : ''}
-            <div style="position:absolute;left:0;bottom:0;height:3px;background:#6750A4;width:100%;transform-origin:left;animation:dgutShrinkX ${durationMs}ms linear forwards;"></div>`;
+            <div class="dgut-toast-title">${escapeHtml(title)}</div>
+            <div class="dgut-toast-body">${escapeHtml(body)}</div>
+            ${subtext ? `<div class="dgut-toast-sub">${escapeHtml(subtext)}</div>` : ''}
+            <div class="dgut-toast-progress" style="animation-duration:${durationMs}ms;"></div>`;
         document.body.appendChild(card);
         card.onclick = () => card.remove();
         setTimeout(() => card.remove(), durationMs + 500);
@@ -493,9 +908,8 @@
         const line = { t: Date.now(), text: String(text), level };
         const el = document.getElementById('dgut-sign-log');
         if (el) {
-            const color = level === 'success' ? '#2E7D32' : level === 'warn' ? '#B3261E' : level === 'muted' ? '#79747E' : '#49454E';
             const div = document.createElement('div');
-            div.style.cssText = `color:${color};line-height:1.7;word-break:break-all;`;
+            div.className = `dgut-log-line log-${level || 'info'}`;
             div.textContent = `[${new Date(line.t).toLocaleTimeString('zh-CN')}] ${line.text}`;
             el.appendChild(div);
             while (el.childElementCount > 400) el.removeChild(el.firstChild);
@@ -589,9 +1003,11 @@
     function renderSignViewStatus() {
         const el = document.getElementById('dgut-sign-status');
         if (!el) return;
-        el.innerHTML = (gSignMonitor && gSignMonitor.running)
-            ? `<span style="color:#2E7D32;font-weight:600;">● 监测中</span> · 《${escapeHtml(gSignMonitor.course.name)}》 · 已处理 ${gSignMonitor.checked.size} 项`
-            : `<span style="color:#79747E;">○ 未运行</span>`;
+        if (gSignMonitor && gSignMonitor.running) {
+            el.innerHTML = `<span style="color:var(--dgut-success);font-weight:600;">● 监测中</span> · 《${escapeHtml(gSignMonitor.course.name)}》 · 已处理 ${gSignMonitor.checked.size} 项`;
+        } else {
+            el.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">○ 未运行</span>`;
+        }
     }
     function renderSignViewRefreshCourses() { const box = document.getElementById('dgut-sign-courses'); if (box) renderSignCourseList(box); }
     function renderSignCourseList(box) {
@@ -599,11 +1015,14 @@
         const cfg = getSignConfig();
         const kw = (document.getElementById('dgut-sign-search')?.value || '').trim().toLowerCase();
         const list = gSignCourses.filter(c => !kw || c.name.toLowerCase().includes(kw) || String(c.id).includes(kw) || (c.teacherName || '').toLowerCase().includes(kw));
-        if (!list.length) { box.innerHTML = `<div style="font-size:12px;color:#79747E;padding:6px 0;">${gSignCourses.length ? '无匹配课程' : '尚未读取课程，点击上方"读取课程"'}</div>`; return; }
+        if (!list.length) {
+            box.innerHTML = `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">${gSignCourses.length ? '无匹配课程' : '尚未读取课程，点击上方"读取课程"'}</div>`;
+            return;
+        }
         box.innerHTML = list.slice(0, 60).map(c => {
             const active = String(c.id) === String(cfg.selectedCourseId);
-            return `<button class="dgut-sign-course" data-id="${c.id}" data-name="${escapeHtml(c.name)}" style="display:block;width:100%;text-align:left;margin-bottom:4px;padding:8px 10px;border:1px solid ${active ? '#6750A4' : '#E7E0EC'};border-radius:10px;background:${active ? '#E8DEF8' : '#fff'};cursor:pointer;font-size:13px;color:#1D1B20;">
-                <b>${escapeHtml(c.name)}</b><span style="color:#79747E;font-size:11px;margin-left:6px;">${escapeHtml(c.teacherName || '')} · #${c.id}</span></button>`;
+            return `<button class="dgut-sign-course${active ? ' active' : ''}" data-id="${c.id}" data-name="${escapeHtml(c.name)}">
+                <b>${escapeHtml(c.name)}</b><span class="course-meta">${escapeHtml(c.teacherName || '')} · #${c.id}</span></button>`;
         }).join('');
         box.querySelectorAll('.dgut-sign-course').forEach(btn => btn.onclick = () => {
             saveSignConfig({ selectedCourseId: Number(btn.dataset.id), selectedCourseName: btn.dataset.name });
@@ -613,35 +1032,37 @@
     function renderSignView(ac) {
         const cfg = getSignConfig();
         ac.innerHTML = actionHeader(ACTION_TITLES.sign, '轮询当日课堂活动并自动签到') + `
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="display:flex;gap:8px;margin-bottom:10px;">
-                    <input id="dgut-sign-search" placeholder="搜索课程（名称/教师/ID）" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #CAC4D0;border-radius:10px;background:#F3EDF7;font-size:13px;outline:none;">
+            <div class="dgut-card">
+                <div class="dgut-row dgut-row--mb">
+                    <input id="dgut-sign-search" class="dgut-input" placeholder="搜索课程（名称/教师/ID）" style="flex:1;min-width:0;">
                     <button id="dgut-sign-load" class="dgut-btn dgut-btn-primary" style="flex:none;">${icons.refresh} 读取课程</button>
                 </div>
-                <div id="dgut-sign-courses" style="max-height:200px;overflow-y:auto;"></div>
+                <div id="dgut-sign-courses" class="dgut-list-box"></div>
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:10px;">监测设置</div>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:10px;">
-                    <label>轮询间隔(秒) <input type="number" id="dgut-sign-interval" value="${cfg.pollInterval}" min="2" max="3600" style="width:64px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;"></label>
-                    <label>纬度 <input type="number" id="dgut-sign-lat" value="${cfg.lat}" step="0.0001" style="width:110px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;"></label>
-                    <label>经度 <input type="number" id="dgut-sign-lng" value="${cfg.lng}" step="0.0001" style="width:110px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;"></label>
-                    <label>地址 <input type="text" id="dgut-sign-addr" value="${escapeHtml(cfg.address)}" style="width:150px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;"></label>
+            <div class="dgut-card">
+                <div class="dgut-section-title">监测设置</div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">轮询间隔(秒) <input type="number" id="dgut-sign-interval" class="dgut-input" value="${cfg.pollInterval}" min="2" max="3600" style="width:64px;padding:4px 6px;"></label>
+                    <label class="dgut-label">纬度 <input type="number" id="dgut-sign-lat" class="dgut-input" value="${cfg.lat}" step="0.0001" style="width:110px;padding:4px 6px;"></label>
+                    <label class="dgut-label">经度 <input type="number" id="dgut-sign-lng" class="dgut-input" value="${cfg.lng}" step="0.0001" style="width:110px;padding:4px 6px;"></label>
+                    <label class="dgut-label">地址 <input type="text" id="dgut-sign-addr" class="dgut-input" value="${escapeHtml(cfg.address)}" style="width:150px;padding:4px 6px;"></label>
                 </div>
-                <label style="display:block;font-size:13px;cursor:pointer;margin-bottom:10px;"><input type="checkbox" id="dgut-sign-savelog" ${cfg.saveLog ? 'checked' : ''}> 保存签到记录（可导出 Markdown）</label>
-                <div id="dgut-sign-status" style="font-size:12px;margin-bottom:10px;"></div>
-                <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+                <label class="dgut-label" style="display:block;cursor:pointer;margin-bottom:10px;">
+                    <input type="checkbox" id="dgut-sign-savelog" ${cfg.saveLog ? 'checked' : ''}> 保存签到记录（可导出 Markdown）
+                </label>
+                <div id="dgut-sign-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
+                <div class="dgut-row dgut-row--end">
                     <button id="dgut-sign-save" class="dgut-btn">${icons.settings} 保存设置</button>
                     <button id="dgut-sign-start" class="dgut-btn dgut-btn-primary">${icons.sign} 开始监测</button>
                     <button id="dgut-sign-stop" class="dgut-btn">停止</button>
                     <button id="dgut-sign-export" class="dgut-btn">${icons.export} 导出记录</button>
                 </div>
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:6px;">运行日志</div>
-                <div id="dgut-sign-log" style="max-height:240px;overflow-y:auto;font-size:12px;background:#F7F2FA;border-radius:10px;padding:8px 10px;"></div>
+            <div class="dgut-card dgut-card--tight">
+                <div class="dgut-section-title">运行日志</div>
+                <div id="dgut-sign-log" class="dgut-log"></div>
             </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:12px 14px;font-size:12px;color:#4A4458;line-height:1.8;margin-top:12px;">
+            <div class="dgut-hint">
                 <b>关于二维码签到</b>：本脚本不会识别教室现场展示的二维码图片。数字码签到、一键签到可直接完成；二维码签到仅当活动数据本身已包含签到码时才会自动处理，否则会明确跳过并记录原因。
             </div>`;
         const box = ac.querySelector('#dgut-sign-courses');
@@ -665,7 +1086,7 @@
             GM_getValue(SIGN_LOG_KEY, []).slice(-30).forEach(r => {
                 const d = new Date(r.time);
                 const div = document.createElement('div');
-                div.style.cssText = 'color:#79747E;line-height:1.7;';
+                div.className = 'dgut-log-line log-muted';
                 div.textContent = `[${d.toLocaleString('zh-CN')}] ${r.course} | ${r.kind} | ${r.status || ''} ${r.message || ''}`;
                 logEl.appendChild(div);
             });
@@ -691,9 +1112,8 @@
     function chLog(text, level = 'info') {
         const el = document.getElementById('dgut-ch-log');
         if (el) {
-            const color = level === 'success' ? '#2E7D32' : level === 'warn' ? '#B3261E' : level === 'muted' ? '#79747E' : '#49454E';
             const div = document.createElement('div');
-            div.style.cssText = `color:${color};line-height:1.7;`;
+            div.className = `dgut-log-line log-${level || 'info'}`;
             div.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${text}`;
             el.appendChild(div);
             while (el.childElementCount > 400) el.removeChild(el.firstChild);
@@ -1093,9 +1513,11 @@
         const cfg = getCourseHelperConfig();
         const page = pgReText((document.querySelector('.page-name.active') || {}).textContent || '');
         const qLeft = document.querySelectorAll('.question-wrapper:not(.finished)').length;
-        el.innerHTML = (gCourseHelper && gCourseHelper.running)
-            ? `<span style="color:#2E7D32;font-weight:600;">● 运行中</span> · 页面「${escapeHtml(page || '未知')}」 · 视频 ${document.querySelectorAll('video').length} · 未完成题 ${qLeft} · 倍速 ${cfg.rate}×`
-            : `<span style="color:#79747E;">○ 未运行</span>`;
+        if (gCourseHelper && gCourseHelper.running) {
+            el.innerHTML = `<span style="color:var(--dgut-success);font-weight:600;">● 运行中</span> · 页面「${escapeHtml(page || '未知')}」 · 视频 ${document.querySelectorAll('video').length} · 未完成题 ${qLeft} · 倍速 ${cfg.rate}×`;
+        } else {
+            el.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">○ 未运行</span>`;
+        }
     }
 
     function startCourseHelper() {
@@ -1126,20 +1548,20 @@
         const cfg = getCourseHelperConfig();
         const onPage = isCoursePage();
         ac.innerHTML = actionHeader(ACTION_TITLES.course, '课件视频倍速、自动答题、自动翻页与题库') + `
-            <div style="background:${onPage ? '#E8F5E9' : '#FFF3E0'};border:1px solid #E7E0EC;border-radius:12px;padding:10px 14px;font-size:12px;line-height:1.7;margin-bottom:12px;color:#49454E;">
+            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
                 ${onPage ? '✓ 当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:12px;">
-                    <label>视频倍速 <input type="number" id="dgut-ch-rate" value="${cfg.rate}" min="1" max="16" step="0.5" style="width:60px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;"></label>
+            <div class="dgut-card">
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">视频倍速 <input type="number" id="dgut-ch-rate" class="dgut-input" value="${cfg.rate}" min="1" max="16" step="0.5" style="width:60px;padding:4px 6px;"></label>
                 </div>
-                <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin-bottom:12px;">
-                    <label style="cursor:pointer;color:${cfg.autoAnswer ? '#6750A4' : '#49454E'};"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
-                    <label style="cursor:pointer;"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
-                    <label style="cursor:pointer;"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
                 </div>
-                <div id="dgut-ch-status" style="font-size:12px;margin-bottom:10px;"></div>
-                <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+                <div id="dgut-ch-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
+                <div class="dgut-row dgut-row--end">
                     <button id="dgut-ch-save" class="dgut-btn">${icons.settings} 保存设置</button>
                     <button id="dgut-ch-start" class="dgut-btn dgut-btn-primary">${icons.course} 启动</button>
                     <button id="dgut-ch-stop" class="dgut-btn">停止</button>
@@ -1147,9 +1569,9 @@
                     <button id="dgut-ch-clear" class="dgut-btn">清空题库</button>
                 </div>
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:12px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:6px;">运行日志</div>
-                <div id="dgut-ch-log" style="max-height:220px;overflow-y:auto;font-size:12px;background:#F7F2FA;border-radius:10px;padding:8px 10px;"></div>
+            <div class="dgut-card dgut-card--tight">
+                <div class="dgut-section-title">运行日志</div>
+                <div id="dgut-ch-log" class="dgut-log" style="max-height:220px;"></div>
             </div>`;
         const readCfg = () => ({
             rate: Math.min(16, Math.max(1, Number(ac.querySelector('#dgut-ch-rate').value) || 6)),
@@ -1571,7 +1993,13 @@
             });
         });
     }
-    function peerCardClass(score) { const s = parseFloat(score); if (isNaN(s)) return ['#E7E0EC', '#1D1B20']; if (s < 90) return ['#AEAAE4', '#1D1B20']; if (s <= 95) return ['#CAC4D0', '#1D1B20']; return ['#E7E0EC', '#1D1B20']; }
+    function peerCardClass(score) {
+        const s = parseFloat(score);
+        if (isNaN(s)) return '';
+        if (s < 90) return 'peer-low';
+        if (s <= 95) return 'peer-mid';
+        return 'peer-high';
+    }
     function peerRenderList() {
         const el = document.getElementById('dgut-peer-list');
         if (!el) return;
@@ -1591,15 +2019,21 @@
             return true;
         });
         list.sort((a, b) => peerToMs(b.time) - peerToMs(a.time));
-        if (!list.length) { el.innerHTML = `<div style="text-align:center;color:#79747E;padding:20px;font-size:13px;">暂无互评记录。请打开作业互评详情页后点击"扫描当前作业"。</div>`; return; }
+        if (!list.length) {
+            el.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:20px;font-size:13px;">暂无互评记录。请打开作业互评详情页后点击"扫描当前作业"。</div>`;
+            return;
+        }
         el.innerHTML = list.map(r => {
-            const [bg, fg] = peerCardClass(r.score);
+            const cls = peerCardClass(r.score);
             const t = new Date(peerToMs(r.time)).toLocaleString('zh-CN', { hour12: false });
-            return `<div style="background:${bg};color:${fg};border-radius:12px;padding:10px 14px;margin-bottom:10px;">
-                <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:600;"><span>${escapeHtml(r.reviewerName || '?')}</span><span>${r.score}分</span></div>
-                <div style="font-size:12px;opacity:.85;margin:4px 0 6px;">作业：${escapeHtml(r.hwName || '?')}</div>
-                <div style="font-size:13px;line-height:1.4;margin-bottom:6px;">${escapeHtml(r.content || '无评语')}</div>
-                <div style="font-size:11px;opacity:.7;border-top:1px solid rgba(0,0,0,.1);padding-top:5px;display:flex;justify-content:space-between;"><span>班级：${escapeHtml(r.reviewerClassName || '未知')}</span><span>${t}</span></div>
+            return `<div class="dgut-peer-card ${cls}">
+                <div style="display:flex;justify-content:space-between;">
+                    <span class="peer-name">${escapeHtml(r.reviewerName || '?')}</span>
+                    <span class="peer-score">${r.score}分</span>
+                </div>
+                <div class="peer-hw">作业：${escapeHtml(r.hwName || '?')}</div>
+                <div class="peer-content">${escapeHtml(r.content || '无评语')}</div>
+                <div class="peer-foot"><span>班级：${escapeHtml(r.reviewerClassName || '未知')}</span><span>${t}</span></div>
             </div>`;
         }).join('');
     }
@@ -1612,7 +2046,7 @@
                 const u = uid ? gPeerInfoMap[uid] : null;
                 if (u) {
                     const tag = document.createElement('div');
-                    tag.style.cssText = 'font-size:13px;margin:6px 0;padding:4px 8px;border-left:2px solid #6750A4;background:rgba(103,80,164,.06);white-space:pre-line;';
+                    tag.style.cssText = 'font-size:13px;margin:6px 0;padding:4px 8px;border-left:2px solid var(--dgut-primary);background:var(--dgut-info-container);color:var(--dgut-on-info-container);white-space:pre-line;border-radius:0 6px 6px 0;';
                     tag.textContent = `${prefix}：${u.name} ｜ 班级：${u.className || '未知'}`;
                     if (el.parentNode) el.parentNode.insertBefore(tag, el.nextSibling);
                 }
@@ -1679,14 +2113,14 @@
     function renderPeerView(ac) {
         const onPage = !!peerParseParams();
         ac.innerHTML = actionHeader(ACTION_TITLES.peer, '读取互评接口，汇总与筛选记录') + `
-            <div style="background:${onPage ? '#E8F5E9' : '#FFF3E0'};border:1px solid #E7E0EC;border-radius:12px;padding:10px 14px;font-size:12px;line-height:1.7;margin-bottom:12px;color:#49454E;">
+            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
                 ${onPage ? '✓ 当前在作业互评详情页，可点击"扫描当前作业"。' : '请在作业互评详情页（URL 含 <b>stuDetail/学号/作业ID</b>）打开本面板，再扫描。'}
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-                <input id="dgut-peer-ftext" placeholder="按评价人姓名/学号筛选" style="flex:1;min-width:120px;padding:8px 10px;border:1px solid #CAC4D0;border-radius:10px;background:#F3EDF7;font-size:12px;outline:none;">
-                <input id="dgut-peer-fscore" placeholder="分数 80-95 / >90" style="width:130px;padding:8px 10px;border:1px solid #CAC4D0;border-radius:10px;background:#F3EDF7;font-size:12px;outline:none;">
+            <div class="dgut-row dgut-row--mb">
+                <input id="dgut-peer-ftext" class="dgut-input" placeholder="按评价人姓名/学号筛选" style="flex:1;min-width:120px;">
+                <input id="dgut-peer-fscore" class="dgut-input" placeholder="分数 80-95 / >90" style="width:130px;">
             </div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:10px;flex-wrap:wrap;">
+            <div class="dgut-row dgut-row--end dgut-row--mb">
                 <button id="dgut-peer-scan" class="dgut-btn dgut-btn-primary">${icons.refresh} 扫描当前作业</button>
                 <button id="dgut-peer-clear" class="dgut-btn">清空记录</button>
             </div>
@@ -1820,24 +2254,24 @@
         const cfg = rdCfg();
         const onPage = /\/learnCourse\//i.test(location.href) || (rdVm() && rdVm().currentPage);
         ac.innerHTML = actionHeader(ACTION_TITLES.read, '课件阅读时长统计与自动翻页') + `
-            <div style="background:${onPage ? '#E8F5E9' : '#FFF3E0'};border:1px solid #E7E0EC;border-radius:12px;padding:10px 14px;font-size:12px;line-height:1.7;margin-bottom:12px;color:#49454E;">
+            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
                 ${onPage ? '✓ 当前在课件页，可开始求是阅读。' : '请先在优学院打开求是读书课件页（地址含 <b>ua.dgut.edu.cn/learnCourse/learnCourse.html</b>）。'}
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="text-align:center;font-size:30px;font-weight:700;color:#6750A4;font-family:Consolas,monospace;" id="dgut-rd-timer">${rdFmt(rdBookTime(rdBookKey()))}</div>
-                <div style="text-align:center;font-size:12px;color:#79747E;margin:4px 0 12px;" id="dgut-rd-server">服务端: --</div>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:12px;align-items:center;">
-                    <label>翻页间隔 <input type="number" id="dgut-rd-sec" value="${cfg.readerSec}" min="1" style="width:64px;padding:4px;border-radius:8px;border:1px solid #CAC4D0;">秒/页</label>
-                    <span style="color:#79747E;font-size:12px;">目标 4h10m 后自动切书</span>
+            <div class="dgut-card">
+                <div style="text-align:center;font-size:30px;font-weight:700;color:var(--dgut-primary);font-family:Consolas,monospace;" id="dgut-rd-timer">${rdFmt(rdBookTime(rdBookKey()))}</div>
+                <div style="text-align:center;font-size:12px;color:var(--dgut-on-surface-variant);margin:4px 0 12px;" id="dgut-rd-server">服务端: --</div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">翻页间隔 <input type="number" id="dgut-rd-sec" class="dgut-input" value="${cfg.readerSec}" min="1" style="width:64px;padding:4px 6px;"> 秒/页</label>
+                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">目标 4h10m 后自动切书</span>
                 </div>
-                <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+                <div class="dgut-row dgut-row--end">
                     <button id="dgut-rd-save" class="dgut-btn">${icons.settings} 保存间隔</button>
                     <button id="dgut-rd-start" class="dgut-btn dgut-btn-primary">开始</button>
                     <button id="dgut-rd-stop" class="dgut-btn">暂停</button>
                     <button id="dgut-rd-sync" class="dgut-btn">同步服务端</button>
                 </div>
             </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:12px 14px;font-size:12px;color:#4A4458;line-height:1.8;">
+            <div class="dgut-hint">
                 <b>说明</b>：时长以服务端 KO 视图模型为准并本地累计；满 4h10m 后自动翻页/切下一书。阅读器内页（iframe）由本模块 postMessage 驱动并自动翻页。
             </div>`;
         const readSec = () => Math.max(1, parseInt(ac.querySelector('#dgut-rd-sec').value, 10) || 30);
@@ -2019,16 +2453,16 @@ ${sigImgs}
         if (!el) return;
         const sigs = getSignatures();
         if (!sigs.length) {
-            el.innerHTML = `<div style="font-size:12px;color:#79747E;padding:6px 0;">暂无保存的签名。画完后点「保存签名」。</div>`;
+            el.innerHTML = `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">暂无保存的签名。画完后点「保存签名」。</div>`;
             return;
         }
         el.innerHTML = sigs.slice().reverse().map(s => `
-            <div style="border:1px solid #E7E0EC;border-radius:10px;padding:6px;background:#F7F2FA;display:flex;flex-direction:column;gap:4px;width:150px;box-sizing:border-box;">
-                <img src="${s.dataUrl}" alt="签名" style="width:100%;height:56px;object-fit:contain;background:#fff;border-radius:6px;">
-                <div style="font-size:11px;color:#49454E;display:flex;align-items:center;gap:6px;">
-                    <input type="checkbox" class="dgut-sig-pick" data-id="${escapeHtml(String(s.id))}" style="cursor:pointer;">
+            <div class="dgut-sig-card">
+                <img src="${s.dataUrl}" alt="签名">
+                <div class="dgut-sig-meta">
+                    <input type="checkbox" class="dgut-sig-pick" data-id="${escapeHtml(String(s.id))}" style="cursor:pointer;accent-color:var(--dgut-primary);">
                     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(s.name || '')}">${escapeHtml(s.name || '未命名')}</span>
-                    <span class="dgut-sig-del" data-id="${escapeHtml(String(s.id))}" title="删除" style="cursor:pointer;color:#B3261E;font-weight:700;font-size:14px;line-height:1;">×</span>
+                    <span class="dgut-sig-del" data-id="${escapeHtml(String(s.id))}" title="删除">×</span>
                 </div>
             </div>`).join('');
         el.querySelectorAll('.dgut-sig-del').forEach(b => b.onclick = (ev) => {
@@ -2043,31 +2477,31 @@ ${sigImgs}
         const draft = getDocDraft();
         const title = getDocTitle();
         ac.innerHTML = actionHeader(ACTION_TITLES.doc, 'Markdown 转 Word / PDF + 手绘电子签名') + `
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:8px;">${icons.doc} Markdown 内容</div>
-                <textarea id="dgut-doc-md" placeholder="在此输入 Markdown 内容…&#10;支持标准语法：# 标题、**粗体**、*斜体*、- 列表、\`代码\`、\`\`\`代码块\`\`\`、> 引用、| 表格 | 等。" style="width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid #CAC4D0;background:#F3EDF7;font-family:Consolas,monospace;font-size:12px;line-height:1.6;min-height:180px;resize:vertical;outline:none;">${escapeHtml(draft)}</textarea>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
-                    <input id="dgut-doc-title" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;padding:8px 10px;border-radius:10px;border:1px solid #CAC4D0;background:#F3EDF7;font-size:12px;outline:none;">
+            <div class="dgut-card">
+                <div class="dgut-section-title">${icons.doc} Markdown 内容</div>
+                <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…&#10;支持标准语法：# 标题、**粗体**、*斜体*、- 列表、\`代码\`、\`\`\`代码块\`\`\`、> 引用、| 表格 | 等。" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
+                <div class="dgut-row" style="margin-top:10px;">
+                    <input id="dgut-doc-title" class="dgut-input" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;">
                     <button id="dgut-doc-preview" class="dgut-btn">${icons.list} 预览</button>
                     <button id="dgut-doc-word" class="dgut-btn dgut-btn-primary">${icons.export} 导出 Word</button>
                     <button id="dgut-doc-pdf" class="dgut-btn dgut-btn-primary">导出 PDF</button>
                     <button id="dgut-doc-clear" class="dgut-btn">清空</button>
                 </div>
-                <div id="dgut-doc-preview-box" style="display:none;margin-top:10px;padding:12px 14px;background:#F7F2FA;border-radius:10px;font-size:13px;line-height:1.7;max-height:340px;overflow:auto;border:1px solid #E7E0EC;"></div>
+                <div id="dgut-doc-preview-box" style="display:none;"></div>
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:6px;">${icons.sign2} 手绘电子签名</div>
-                <div style="font-size:11px;color:#79747E;margin-bottom:8px;line-height:1.7;">在下方画板手写签名（支持鼠标/触屏/触控笔）。保存后勾选需要附加到导出文档末尾的签名。签名以透明 PNG 形式嵌入 Word/PDF。</div>
-                <input id="dgut-sig-name" placeholder="签名标签（如：本人签名、导师签字）" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:10px;border:1px solid #CAC4D0;background:#F3EDF7;font-size:12px;margin-bottom:8px;outline:none;">
-                <canvas id="dgut-sig-canvas" style="width:100%;height:180px;background:#fff;border:2px dashed #CAC4D0;border-radius:10px;touch-action:none;display:block;cursor:crosshair;box-sizing:border-box;"></canvas>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;justify-content:flex-end;">
+            <div class="dgut-card">
+                <div class="dgut-section-title">${icons.sign2} 手绘电子签名</div>
+                <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-bottom:8px;line-height:1.7;">在下方画板手写签名（支持鼠标/触屏/触控笔）。保存后勾选需要附加到导出文档末尾的签名。签名以透明 PNG 形式嵌入 Word/PDF。</div>
+                <input id="dgut-sig-name" class="dgut-input" placeholder="签名标签（如：本人签名、导师签字）" style="width:100%;margin-bottom:8px;">
+                <canvas id="dgut-sig-canvas"></canvas>
+                <div class="dgut-row dgut-row--end" style="margin-top:10px;">
                     <button id="dgut-sig-clear" class="dgut-btn">清除画布</button>
                     <button id="dgut-sig-save" class="dgut-btn dgut-btn-primary">${icons.add} 保存签名</button>
                 </div>
-                <div style="font-size:12px;color:#49454E;font-weight:600;margin:14px 0 6px;">已保存签名（勾选=附加到导出文档）</div>
+                <div style="font-size:12px;color:var(--dgut-on-surface);font-weight:600;margin:14px 0 6px;">已保存签名（勾选=附加到导出文档）</div>
                 <div id="dgut-sig-list" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
             </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:12px 14px;font-size:12px;color:#4A4458;line-height:1.8;">
+            <div class="dgut-hint">
                 <b>导出说明</b>：<br>
                 · <b>Word</b>：生成 <code>.doc</code>（HTML 内容承载），Word / WPS 可直接打开与二次编辑；<br>
                 · <b>PDF</b>：打开打印视图，在打印对话框中选择"另存为 PDF"即可；<br>
@@ -2139,8 +2573,8 @@ ${sigImgs}
     }
     function actionHeader(title, hint) {
         return `<div style="margin-bottom:14px;">
-            <div style="font-size:15px;font-weight:700;color:var(--dgut-on-surface,#1D1B20);line-height:1.3;">${title}</div>
-            ${hint ? `<div style="font-size:11px;color:var(--dgut-on-surface-variant,#49454E);margin-top:2px;">${hint}</div>` : ''}
+            <div style="font-size:15px;font-weight:700;color:var(--dgut-on-surface);line-height:1.3;">${title}</div>
+            ${hint ? `<div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:2px;">${hint}</div>` : ''}
         </div>`;
     }
     function renderActionView(name) {
@@ -2161,28 +2595,47 @@ ${sigImgs}
     function renderAppearanceView(ac) {
         const mode = GM_getValue(THEME_MODE_KEY, 'auto');
         const accent = GM_getValue(ACCENT_KEY, 'purple');
-        const swatches = Object.entries(ACCENTS).map(([id, a]) => `
-            <button class="dgut-accent" data-id="${id}" title="${a.name}" style="width:34px;height:34px;border-radius:50%;border:3px solid ${accent === id ? '#1D1B20' : 'transparent'};background:${a.primary};cursor:pointer;box-sizing:border-box;"></button>`).join('');
+        const swatches = Object.entries(ACCENTS).map(([id, a]) => {
+            const isActive = accent === id;
+            return `<button class="dgut-accent" data-id="${id}" title="${a.name}" style="
+                width:36px;height:36px;border-radius:50%;
+                border:3px solid ${isActive ? 'var(--dgut-on-surface)' : 'transparent'};
+                background:${a.primary};cursor:pointer;box-sizing:border-box;
+                transition:border-color .15s;
+            "></button>`;
+        }).join('');
+        const modeBtn = (v, label) => {
+            const on = mode === v;
+            return `<button class="dgut-mode" data-mode="${v}" style="
+                padding:8px 16px;border-radius:999px;
+                border:1px solid ${on ? 'var(--dgut-primary)' : 'var(--dgut-outline)'};
+                background:${on ? 'var(--dgut-primary-container)' : 'var(--dgut-surface-3)'};
+                color:${on ? 'var(--dgut-on-primary-container)' : 'var(--dgut-on-surface-variant)'};
+                font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+                transition:background .15s, color .15s, border-color .15s;
+            ">${label}</button>`;
+        };
         ac.innerHTML = actionHeader(ACTION_TITLES.appearance, '亮/暗/跟随系统 + 主体色') + `
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:10px;">主题模式</div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    ${[['light', '亮色'], ['dark', '暗色'], ['auto', '跟随系统']].map(([v, label]) => `
-                        <button class="dgut-mode" data-mode="${v}" style="padding:8px 16px;border-radius:999px;border:1px solid ${mode === v ? 'var(--dgut-primary,#6750A4)' : '#CAC4D0'};background:${mode === v ? 'var(--dgut-primary-container,#E8DEF8)' : '#F3EDF7'};color:#1D1B20;font-size:13px;font-weight:600;cursor:pointer;">${label}</button>`).join('')}
+            <div class="dgut-card">
+                <div class="dgut-section-title">主题模式</div>
+                <div class="dgut-row">
+                    ${modeBtn('light', '亮色')}
+                    ${modeBtn('dark', '暗色')}
+                    ${modeBtn('auto', '跟随系统')}
                 </div>
             </div>
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:700;margin-bottom:10px;">主体色</div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${swatches}</div>
-                <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                    <span style="font-size:12px;color:#49454E;">自定义颜色</span>
-                    <input type="color" id="dgut-accent-custom" value="${/^#([0-9a-f]{6})$/i.test(accent) ? accent : '#6750A4'}" style="width:46px;height:32px;border:1px solid #CAC4D0;border-radius:8px;background:#F3EDF7;cursor:pointer;">
+            <div class="dgut-card">
+                <div class="dgut-section-title">主体色</div>
+                <div class="dgut-row">${swatches}</div>
+                <div class="dgut-row" style="margin-top:14px;">
+                    <span class="dgut-label">自定义颜色</span>
+                    <input type="color" id="dgut-accent-custom" value="${/^#([0-9a-f]{6})$/i.test(accent) ? accent : '#6750A4'}" style="width:46px;height:32px;cursor:pointer;">
                     <button id="dgut-accent-apply" class="dgut-btn">应用自定义色</button>
-                    <span style="font-size:11px;color:#79747E;">当前：${escapeHtml(accentOf(accent).name)}</span>
+                    <span style="font-size:11px;color:var(--dgut-on-surface-variant);">当前：${escapeHtml(accentOf(accent).name)}</span>
                 </div>
             </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:12px 14px;font-size:12px;color:#4A4458;line-height:1.8;">
-                主题作用于主面板与悬浮面板；选择「跟随系统」后会随操作系统的深色模式自动切换。
+            <div class="dgut-hint">
+                主题作用于主面板与悬浮面板；选择「跟随系统」后会随操作系统的深色模式自动切换。自定义色在暗色模式下会自动推导出协调的浅色变体，避免出现高对比刺眼的情况。
             </div>`;
         ac.querySelectorAll('.dgut-mode').forEach(b => b.onclick = () => { GM_setValue(THEME_MODE_KEY, b.dataset.mode); applyTheme(); renderAppearanceView(ac); showStatus('主题模式已更新'); });
         ac.querySelectorAll('.dgut-accent').forEach(b => b.onclick = () => { GM_setValue(ACCENT_KEY, b.dataset.id); applyTheme(); renderAppearanceView(ac); showStatus('主体色已更新'); });
@@ -2192,21 +2645,21 @@ ${sigImgs}
         };
     }
 
-    const ABOUT_VERSION = 'v5.0.3';
+    const ABOUT_VERSION = 'v5.1.1';
     function renderAboutView(ac) {
-        const code = (s) => `<span style="font-family:Consolas,monospace;background:#F3EDF7;padding:1px 5px;border-radius:4px;font-size:11px;color:#6750A4;">${s}</span>`;
+        const code = (s) => `<code>${s}</code>`;
         ac.innerHTML = actionHeader(ACTION_TITLES.about) + `
-            <div style="background:#fff;border:1px solid #E7E0EC;border-radius:14px;padding:16px;margin-bottom:12px;">
+            <div class="dgut-card">
                 <div style="display:flex;align-items:center;gap:12px;">
-                    <svg viewBox="0 0 24 24" width="40" height="40" style="fill:#6750A4;flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
+                    <svg viewBox="0 0 24 24" width="40" height="40" style="fill:var(--dgut-primary);flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
                     <div>
                         <div style="font-size:16px;font-weight:700;">优学院助手 + 文档工具</div>
-                        <div style="font-size:12px;color:#49454E;">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
+                        <div style="font-size:12px;color:var(--dgut-on-surface-variant);">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
                     </div>
                 </div>
-                <p style="margin:10px 0 0;font-size:12px;color:#49454E;line-height:1.7;">面向东莞理工学院优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
+                <p style="margin:10px 0 0;font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;">面向东莞理工学院优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
             </div>
-            <div style="background:#FBEAF9;border:1px solid #E7E0EC;border-radius:14px;padding:14px 16px;font-size:12px;color:#4A4458;line-height:1.8;">
+            <div class="dgut-hint">
                 <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片；刷课自动答题的未知题型一律跳过；文档工具的全部处理均在浏览器本地完成。
             </div>`;
     }
@@ -2216,22 +2669,21 @@ ${sigImgs}
         const pos = GM_getValue(UI_POS_KEY, null);
         const panel = document.createElement('div');
         panel.id = 'dgut-main-panel';
-        panel.style.cssText = `position:fixed;z-index:2147483000;width:780px;max-width:98vw;background:var(--dgut-surface,#FEF7FF);color:var(--dgut-on-surface,#1D1B20);border-radius:16px;box-shadow:0 8px 30px rgba(29,27,32,.18);font-family:var(--dgut-font,"Segoe UI",Roboto,sans-serif);overflow:hidden;border:1px solid var(--dgut-outline-variant,#E7E0EC);`;
         if (pos && pos.left !== undefined) {
-            const pw = panel.offsetWidth || 780, ph = panel.offsetHeight || 600;
+            const pw = 780, ph = 600;
             panel.style.left = Math.max(0, Math.min(Math.max(0, window.innerWidth - pw), pos.left)) + 'px';
             panel.style.top = Math.max(0, Math.min(Math.max(0, window.innerHeight - ph), pos.top)) + 'px';
         } else { panel.style.right = '16px'; panel.style.bottom = '16px'; }
         panel.innerHTML = `
-            <div id="dgut-panel-header" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--dgut-primary,#6750A4);cursor:move;user-select:none;">
-                <svg viewBox="0 0 24 24" width="22" height="22" style="fill:#fff;flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
+            <div id="dgut-panel-header">
+                <svg viewBox="0 0 24 24" width="22" height="22" style="fill:currentColor;flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
                 <div style="flex:1;min-width:0;">
-                    <div style="font-size:14px;font-weight:700;color:#fff;line-height:1.25;">优学院助手 + 文档工具</div>
+                    <div class="panel-title">优学院助手 + 文档工具</div>
                 </div>
-                <button id="dgut-panel-close" title="收起为悬浮面板" style="border:none;background:rgba(255,255,255,.18);color:#fff;width:30px;height:30px;border-radius:50%;font-size:17px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;transition:background .15s;">×</button>
+                <button id="dgut-panel-close" title="收起为悬浮面板">×</button>
             </div>
             <div style="display:flex;flex:1;min-height:0;">
-                <div id="dgut-sidebar" style="width:158px;flex:none;background:var(--dgut-surface-2,#F7F2FA);border-right:1px solid var(--dgut-outline-variant,#E7E0EC);padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;">
+                <div id="dgut-sidebar">
                     <div class="dgut-nav-label">优学院</div>
                     <button class="dgut-nav" data-action="sign">${icons.sign} 课程签到</button>
                     <button class="dgut-nav" data-action="course">${icons.course} 刷课助手</button>
@@ -2242,13 +2694,13 @@ ${sigImgs}
                     <button class="dgut-nav" data-action="appearance">${icons.theme} 外观设置</button>
                     <button class="dgut-nav" data-action="about">${icons.settings} 关于/帮助</button>
                     <div style="flex:1;"></div>
-                    <div style="font-size:10px;color:var(--dgut-on-surface-variant,#49454E);text-align:center;padding:6px 0;opacity:.7;">${ABOUT_VERSION}</div>
+                    <div id="dgut-panel-footer-version">${ABOUT_VERSION}</div>
                 </div>
-                <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--dgut-surface,#FEF7FF);">
-                    <div id="dgut-panel-body" style="flex:1;overflow-y:auto;padding:10px 12px;max-height:72vh;">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--dgut-surface);">
+                    <div id="dgut-panel-body">
                         <div id="dgut-action-container"></div>
                     </div>
-                    <div id="dgut-status-bar" style="padding:6px 12px;font-size:11px;border-top:1px solid var(--dgut-outline-variant,#E7E0EC);background:var(--dgut-surface-2,#F7F2FA);color:var(--dgut-on-surface-variant,#49454E);"></div>
+                    <div id="dgut-status-bar"></div>
                 </div>
             </div>`;
         document.body.appendChild(panel);
@@ -2289,7 +2741,10 @@ ${sigImgs}
         renderActionView(mode);
     }
 
-    const MINI_ICON_SVG = `<svg viewBox="0 0 24 24" width="44" height="44" fill="none"><circle cx="12" cy="12" r="9" stroke="#6750A4" stroke-width="1.8" fill="none"/><path d="M7 12.5l3.2 3.2L17 9" stroke="#6750A4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+    const MINI_ICON_SVG = `<svg viewBox="0 0 24 24" width="44" height="44" fill="none">
+        <circle class="mini-ring" cx="12" cy="12" r="9" stroke-width="1.8" fill="none"/>
+        <path class="mini-check" d="M7 12.5l3.2 3.2L17 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>`;
 
     function createMiniPanel() {
         if (document.getElementById('dgut-mini-panel')) return;
@@ -2297,15 +2752,12 @@ ${sigImgs}
         const mini = document.createElement('div');
         mini.id = 'dgut-mini-panel';
         mini.title = '打开优学院助手';
-        mini.style.cssText = `position:fixed;z-index:2147483001;width:80px;height:80px;border-radius:18px;background:#FEF7FF;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 10px rgba(103,80,164,.2);user-select:none;border:2px solid #E8DEF8;transition:box-shadow .2s,transform .2s;`;
         if (pos && pos.left !== undefined) {
             mini.style.left = Math.max(0, Math.min(Math.max(0, window.innerWidth - 80), pos.left)) + 'px';
             mini.style.top = Math.max(0, Math.min(Math.max(0, window.innerHeight - 80), pos.top)) + 'px';
         } else { mini.style.right = '20px'; mini.style.bottom = '20px'; }
         mini.innerHTML = MINI_ICON_SVG;
         document.body.appendChild(mini);
-        mini.addEventListener('mouseenter', () => { mini.style.boxShadow = '0 3px 14px rgba(103,80,164,.35)'; mini.style.transform = 'scale(1.06)'; });
-        mini.addEventListener('mouseleave', () => { mini.style.boxShadow = '0 2px 10px rgba(103,80,164,.2)'; mini.style.transform = 'scale(1)'; });
         let drag = null, moved = false;
         mini.addEventListener('mousedown', (e) => {
             const rect = mini.getBoundingClientRect();
