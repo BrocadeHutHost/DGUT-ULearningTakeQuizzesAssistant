@@ -561,7 +561,7 @@
         run();
         gSignMonitor.timer = setInterval(run, interval * 1000);
         renderSignViewStatus();
-        showToastCard(`${icons.sign} 签到监测已启动`, `《${course.name}》· 每 ${interval} 秒检查一次`, '数字码/一键签到自动完成；二维码需活动自带码', 8000);
+        showToastCard(`签到监测已启动`, `《${course.name}》· 每 ${interval} 秒检查一次`, '数字码/一键签到自动完成；二维码需活动自带码', 8000);
     }
     function stopSignMonitor(silent = false) {
         if (!gSignMonitor) return;
@@ -1107,7 +1107,7 @@
         chLog(`刷课助手启动：倍速 ${cfg.rate}×`, 'success');
         gCourseHelper.uiTimer = setInterval(() => { if (!gCourseHelper || !gCourseHelper.running) { clearInterval(gCourseHelper.uiTimer); return; } chUpdateStatus(); }, 2000);
         chUpdateStatus();
-        showToastCard(`${icons.course} 刷课助手已启动`, `倍速 ${cfg.rate}× · 自动答题/翻页`, '答案源：视图模型 → 本地题库 → 接口', 8000);
+        showToastCard(`刷课助手已启动`, `倍速 ${cfg.rate}× · 自动答题/翻页`, '答案源：视图模型 → 本地题库 → 接口', 8000);
         playAlarmBeep({ count: 1, volume: 0.3 });
     }
     function stopCourseHelper() {
