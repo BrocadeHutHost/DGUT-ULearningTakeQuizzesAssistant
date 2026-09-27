@@ -2270,9 +2270,6 @@
                     <button id="dgut-rd-stop" class="dgut-btn">暂停</button>
                     <button id="dgut-rd-sync" class="dgut-btn">同步服务端</button>
                 </div>
-            </div>
-            <div class="dgut-hint">
-                <b>说明</b>：时长以服务端 KO 视图模型为准并本地累计；满 4h10m 后自动翻页/切下一书。阅读器内页（iframe）由本模块 postMessage 驱动并自动翻页。
             </div>`;
         const readSec = () => Math.max(1, parseInt(ac.querySelector('#dgut-rd-sec').value, 10) || 30);
         ac.querySelector('#dgut-rd-save').onclick = () => { rdSaveCfg({ readerSec: readSec() }); rdSyncReader(); showStatus('翻页间隔已保存'); };
@@ -2478,7 +2475,7 @@ ${sigImgs}
         const title = getDocTitle();
         ac.innerHTML = actionHeader(ACTION_TITLES.doc, 'Markdown 转 Word / PDF + 手绘电子签名') + `
             <div class="dgut-card">
-                <div class="dgut-section-title">${icons.doc} Markdown 内容</div>
+                <div class="dgut-section-title"> Markdown 内容</div>
                 <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…&#10;支持标准语法：# 标题、**粗体**、*斜体*、- 列表、\`代码\`、\`\`\`代码块\`\`\`、> 引用、| 表格 | 等。" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
                 <div class="dgut-row" style="margin-top:10px;">
                     <input id="dgut-doc-title" class="dgut-input" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;">
@@ -2490,7 +2487,7 @@ ${sigImgs}
                 <div id="dgut-doc-preview-box" style="display:none;"></div>
             </div>
             <div class="dgut-card">
-                <div class="dgut-section-title">${icons.sign2} 手绘电子签名</div>
+                <div class="dgut-section-title">手绘电子签名</div>
                 <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-bottom:8px;line-height:1.7;">在下方画板手写签名（支持鼠标/触屏/触控笔）。保存后勾选需要附加到导出文档末尾的签名。签名以透明 PNG 形式嵌入 Word/PDF。</div>
                 <input id="dgut-sig-name" class="dgut-input" placeholder="签名标签（如：本人签名、导师签字）" style="width:100%;margin-bottom:8px;">
                 <canvas id="dgut-sig-canvas"></canvas>
@@ -2633,9 +2630,6 @@ ${sigImgs}
                     <button id="dgut-accent-apply" class="dgut-btn dgut-btn-primary">应用自定义色</button>
                     <span style="font-size:11px;color:var(--dgut-on-surface-variant);">当前：${escapeHtml(accentOf(accent).name)}</span>
                 </div>
-            </div>
-            <div class="dgut-hint">
-                主题作用于主面板与悬浮面板；选择「跟随系统」后会随操作系统的深色模式自动切换。自定义色在暗色模式下会自动推导出协调的浅色变体，避免出现高对比刺眼的情况。
             </div>`;
         ac.querySelectorAll('.dgut-mode').forEach(b => b.onclick = () => { GM_setValue(THEME_MODE_KEY, b.dataset.mode); applyTheme(); renderAppearanceView(ac); showStatus('主题模式已更新'); });
         ac.querySelectorAll('.dgut-accent').forEach(b => b.onclick = () => { GM_setValue(ACCENT_KEY, b.dataset.id); applyTheme(); renderAppearanceView(ac); showStatus('主体色已更新'); });
