@@ -2630,7 +2630,7 @@ ${sigImgs}
                 <div class="dgut-row" style="margin-top:14px;">
                     <span class="dgut-label">自定义颜色</span>
                     <input type="color" id="dgut-accent-custom" value="${/^#([0-9a-f]{6})$/i.test(accent) ? accent : '#6750A4'}" style="width:46px;height:32px;cursor:pointer;">
-                    <button id="dgut-accent-apply" class="dgut-btn">应用自定义色</button>
+                    <button id="dgut-accent-apply" class="dgut-btn dgut-btn-primary">应用自定义色</button>
                     <span style="font-size:11px;color:var(--dgut-on-surface-variant);">当前：${escapeHtml(accentOf(accent).name)}</span>
                 </div>
             </div>
