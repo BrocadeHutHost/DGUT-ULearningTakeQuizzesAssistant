@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.2.0
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF(直出下载) + Word 转 PDF(直出下载) + 图片工具(压缩/增大/高质量平滑处理) + 手绘电子签名。
+// @version      5.5.0
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -17,9 +17,6 @@
 // @grant        unsafeWindow
 // @require      https://cdn.jsdelivr.net/npm/marked/marked.min.js
 // @require      https://code.jquery.com/jquery-1.12.4.min.js
-// @require      https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js
-// @require      https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js
-// @require      https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js
 // @connect      lms.dgut.edu.cn
 // @connect      application.dgut.edu.cn
 // @connect      courseapi.ulearning.cn
@@ -27,6 +24,9 @@
 // @connect      api.ulearning.cn
 // @connect      *.ulearning.cn
 // @connect      *.dgut.edu.cn
+// @connect      cdn.jsdelivr.net
+// @connect      unpkg.com
+// @connect      code.jquery.com
 // @license      AGPL-3.0-only
 // ==/UserScript==
 
@@ -42,6 +42,7 @@
     const THEME_MODE_KEY = 'dgut_theme_mode';
     const ACCENT_KEY = 'dgut_theme_accent';
     const MANUAL_TOKEN_KEY = 'dgut_manual_token';
+    const MANUAL_USERID_KEY = 'dgut_manual_userid';
     const SIGN_CONFIG_KEY = 'dgut_sign_config';
     const SIGN_LOG_KEY = 'dgut_sign_log';
     const SIGN_USERID_KEY = 'dgut_sign_userid';
@@ -54,7 +55,210 @@
     const DOC_TITLE_KEY = 'dgut_doc_md_title';
     const DOC_SIGN_KEY  = 'dgut_doc_signatures';
     const IMG_CFG_KEY   = 'dgut_image_tool_config';
+    const DETAIL_TAB_KEY = 'dgut_detail_tab';
     const DEBUG = true;
+
+    /* ============================================================
+     * 错误码系统
+     * ============================================================ */
+    const ERR = {
+        SIGN_NO_TOKEN:      { code: 1131, msg: '无法获取 Token，请先登录优学院' },
+        SIGN_TOKEN_EXPIRED: { code: 1132, msg: 'Token 已过期，请重新登录' },
+        SIGN_NET_FAIL:      { code: 1111, msg: '网络请求失败' },
+        SIGN_TIMEOUT:       { code: 1112, msg: '请求超时' },
+        SIGN_HTTP_ERR:      { code: 1113, msg: 'HTTP 状态码异常' },
+        SIGN_AUTH_FAIL:     { code: 1133, msg: '认证失败（401/403），请重新登录' },
+        SIGN_PARSE_FAIL:    { code: 1121, msg: '返回数据解析失败' },
+        SIGN_NO_USERID:     { code: 1231, msg: '未获取到用户ID (userid)' },
+        SIGN_USERID_LOWCONF:{ code: 1232, msg: 'userid 来自低置信度来源（成员列表），可能与当前登录用户不符，已阻止自动签到' },
+        SIGN_COURSE_EMPTY:  { code: 1221, msg: '课程列表为空' },
+        SIGN_NO_COURSE:     { code: 1251, msg: '尚未选择课程' },
+        COURSE_NO_JQ:       { code: 2241, msg: 'jQuery 未加载' },
+        COURSE_NO_KO:       { code: 2242, msg: 'Knockout 视图模型未就绪' },
+        COURSE_ANSWER_FAIL: { code: 2221, msg: '答案获取失败' },
+        COURSE_NO_PAGE:     { code: 2261, msg: '当前不在课件页' },
+        COURSE_IFRAME:      { code: 2262, msg: '课件在 iframe 内，请在 iframe 页面中打开本面板' },
+        COURSE_LOGIC_ERR:   { code: 2201, msg: '刷课逻辑运行异常' },
+        PEER_NOT_PAGE:      { code: 3361, msg: '当前不是作业互评详情页' },
+        PEER_PARSE_FAIL:    { code: 3321, msg: '互评数据解析失败' },
+        PEER_NO_TOKEN:      { code: 3331, msg: '未获取到互评 Token' },
+        PEER_NET_FAIL:      { code: 3311, msg: '互评请求失败' },
+        READ_NO_VM:         { code: 4441, msg: '未找到课件视图模型 (koLearnCourseViewModel)' },
+        READ_NO_PAGE:       { code: 4461, msg: '当前不在读书课件页' },
+        DOC_NO_MARKED:      { code: 5541, msg: 'marked 库未加载' },
+        DOC_NO_H2C:         { code: 5542, msg: 'html2canvas 未加载' },
+        DOC_NO_JSPDF:       { code: 5543, msg: 'jsPDF 未加载' },
+        DOC_EMPTY_MD:       { code: 5561, msg: 'Markdown 内容为空' },
+        DOC_PARSE_MD:       { code: 5521, msg: 'Markdown 渲染失败' },
+        DOC_PDF_FAIL:       { code: 5522, msg: 'PDF 生成失败' },
+        DOC_WORD_FAIL:      { code: 5523, msg: 'Word 导出失败' },
+        WP_NO_MAMMOTH:      { code: 6641, msg: 'mammoth 库未加载' },
+        WP_NO_FILE:         { code: 6651, msg: '未选择文件' },
+        WP_PARSE_FAIL:      { code: 6621, msg: '文档解析失败' },
+        WP_EMPTY:           { code: 6622, msg: '文档内容为空或无法解析' },
+        IMG_NO_FILE:        { code: 7761, msg: '未选择图片' },
+        IMG_DECODE_FAIL:    { code: 7721, msg: '图片解码失败' },
+        IMG_ENCODE_FAIL:    { code: 7722, msg: '图片编码失败' },
+        IMG_READ_FAIL:      { code: 7711, msg: '读取文件失败' },
+        CORE_NO_GM_XHR:     { code: 8841, msg: 'GM_xmlhttpRequest 不可用' },
+        CORE_NO_GM_COOKIE:  { code: 8842, msg: 'GM_cookie 不可用' },
+        CORE_NO_GM_STORE:   { code: 8843, msg: 'GM_setValue/GM_getValue 不可用' },
+        CORE_NO_UNSAFE:     { code: 8844, msg: 'unsafeWindow 不可用' },
+        CORE_NOT_TOP:       { code: 8801, msg: '当前帧非顶层窗口' },
+        CORE_LIB_FAIL:      { code: 8845, msg: '外部依赖库加载失败' }
+    };
+
+    function errTag(def) { return `[E${def.code}]`; }
+    function errFull(def, detail) { return `${errTag(def)} ${def.msg}${detail ? '（' + detail + '）' : ''}`; }
+
+    // 错误码分组（用于详情页表格渲染，避免重复罗列）
+    const ERR_GROUPS = [
+        { module: '通用 / 框架', codes: [8841, 8842, 8843, 8844, 8845, 8801] },
+        { module: '课程签到',   codes: [1131, 1132, 1133, 1111, 1112, 1113, 1121, 1221, 1231, 1232, 1251] },
+        { module: '刷课助手',   codes: [2201, 2221, 2241, 2242, 2261, 2262] },
+        { module: '作业互评',   codes: [3311, 3321, 3331, 3361] },
+        { module: '求是读书',   codes: [4441, 4461] },
+        { module: '文档工具',   codes: [5521, 5522, 5523, 5541, 5542, 5543, 5561] },
+        { module: 'Word 转 PDF', codes: [6621, 6622, 6641, 6651] },
+        { module: '图片工具',   codes: [7711, 7721, 7722, 7761] }
+    ];
+    const ERR_BY_CODE = (() => {
+        const m = {};
+        for (const k in ERR) { if (ERR[k] && ERR[k].code) m[ERR[k].code] = ERR[k]; }
+        return m;
+    })();
+
+    /* ============================================================
+     * 依赖库按需加载器
+     * ------------------------------------------------------------
+     * 关键修复：油猴脚本在带 @grant 时会运行在沙箱中，
+     * 用 <script> 注入的库把全局变量挂到「页面 window」上，
+     * 沙箱里的 window 代理不保证能读到 → 之前一直报
+     * 「mammoth 库未加载」。现在统一从 unsafeWindow(PAGE_WIN)
+     * 读取，并增加 unpkg 备用源 + GM_xmlhttpRequest 兜底。
+     * ============================================================ */
+    const LIB_LOADERS = {};
+
+    function injectScript(url) {
+        return new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = url;
+            s.async = true;
+            s.onload = () => { resolve(); };
+            s.onerror = () => { try { s.remove(); } catch (e) {} reject(new Error('script error: ' + url)); };
+            (document.head || document.documentElement).appendChild(s);
+        });
+    }
+
+    function gmGetText(url) {
+        return new Promise((resolve, reject) => {
+            if (typeof GM_xmlhttpRequest !== 'function') return reject(new Error('GM_xmlhttpRequest 不可用'));
+            GM_xmlhttpRequest({
+                method: 'GET', url, timeout: 30000,
+                onload: (res) => {
+                    if (res.status >= 200 && res.status < 300 && res.responseText) resolve(res.responseText);
+                    else reject(new Error('HTTP ' + res.status));
+                },
+                onerror: () => reject(new Error('网络错误')),
+                ontimeout: () => reject(new Error('超时'))
+            });
+        });
+    }
+
+    function readGlobal(name) {
+        try { if (typeof window !== 'undefined' && window[name] !== undefined && window[name] !== null) return window[name]; } catch (e) {}
+        try { if (typeof PAGE_WIN !== 'undefined' && PAGE_WIN && PAGE_WIN[name] !== undefined && PAGE_WIN[name] !== null) return PAGE_WIN[name]; } catch (e) {}
+        try { if (typeof self !== 'undefined' && self[name] !== undefined && self[name] !== null) return self[name]; } catch (e) {}
+        return undefined;
+    }
+
+    /**
+     * 通用库加载：依次尝试多个 CDN → 失败后用 GM_xmlhttpRequest 取源码 eval 兜底
+     */
+    function loadLib(key, urls, checkFn) {
+        if (LIB_LOADERS[key]) return LIB_LOADERS[key];
+        const p = (async () => {
+            let lastErr = null;
+            // 阶段 1：script 标签注入（两个 CDN 依次尝试）
+            for (const url of urls) {
+                try {
+                    await injectScript(url);
+                    const v = checkFn();
+                    if (v) { log(`[依赖] ${key} 已通过 <script> 加载：${url}`); return v; }
+                } catch (e) { lastErr = e; }
+            }
+            // 阶段 2：GM_xmlhttpRequest 拉取源码后在沙箱内执行
+            for (const url of urls) {
+                try {
+                    const code = await gmGetText(url);
+                    (0, eval)(code);
+                    const v = checkFn();
+                    if (v) { log(`[依赖] ${key} 已通过 GM 拉取+eval 加载：${url}`); return v; }
+                } catch (e) { lastErr = e; }
+            }
+            throw new Error(errFull(ERR.CORE_LIB_FAIL, `${key}${lastErr ? '：' + lastErr.message : ''}`));
+        })();
+        LIB_LOADERS[key] = p;
+        p.catch(() => { delete LIB_LOADERS[key]; }); // 失败后允许重试
+        return p;
+    }
+
+    const CDN_MARKED = ['https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js', 'https://unpkg.com/marked@12.0.2/marked.min.js'];
+    const CDN_MAMMOTH = ['https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js', 'https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js'];
+    const CDN_H2C = ['https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js', 'https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js'];
+    const CDN_JSPDF = ['https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js', 'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'];
+
+    async function ensureMarked() {
+        let m = readGlobal('marked');
+        if (m && typeof m.parse === 'function') return m;
+        m = await loadLib('marked', CDN_MARKED, () => {
+            const v = readGlobal('marked');
+            return (v && typeof v.parse === 'function') ? v : null;
+        });
+        return m;
+    }
+    async function ensureMammoth() {
+        let m = readGlobal('mammoth');
+        if (m && typeof m.convertToHtml === 'function') return m;
+        m = await loadLib('mammoth', CDN_MAMMOTH, () => {
+            const v = readGlobal('mammoth');
+            return (v && typeof v.convertToHtml === 'function') ? v : null;
+        });
+        return m;
+    }
+    async function ensureHtml2Canvas() {
+        let v = readGlobal('html2canvas');
+        if (typeof v === 'function') return v;
+        v = await loadLib('html2canvas', CDN_H2C, () => {
+            const x = readGlobal('html2canvas');
+            return typeof x === 'function' ? x : null;
+        });
+        return v;
+    }
+    async function ensureJsPDF() {
+        const pick = () => {
+            const j = readGlobal('jspdf');
+            if (j && j.jsPDF) return j.jsPDF;
+            const f = readGlobal('jsPDF');
+            return typeof f === 'function' ? f : null;
+        };
+        let v = pick();
+        if (v) return v;
+        v = await loadLib('jspdf', CDN_JSPDF, pick);
+        return v;
+    }
+
+    /* ============================================================
+     * iframe 环境检测
+     * ============================================================ */
+    function detectIframe() {
+        const isTop = (() => { try { return window.top === window.self; } catch (e) { return false; } })();
+        const hasVideo = document.querySelectorAll('video').length > 0;
+        let hasVM = false, hasKo = false;
+        try { hasVM = !!(PAGE_WIN.koLearnCourseViewModel && typeof PAGE_WIN.koLearnCourseViewModel.currentPage === 'function'); } catch (e) {}
+        try { hasKo = typeof PAGE_WIN.ko !== 'undefined'; } catch (e) {}
+        return { isTop, hasVideo, hasVM, hasKo };
+    }
 
     if (window.top !== window.self) {
         (function readerFrameBootstrap() {
@@ -112,49 +316,142 @@
     const PAGE_WIN = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
 
     const log = (...a) => { if (DEBUG) console.log(TAG, ...a); };
-    if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
+
+    function escapeHtml(str) {
+        if (typeof str !== 'string') return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function dateKey(d = new Date()) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    /* ============================================================
+     * Token 检查（含 JWT 过期解析）
+     * ============================================================ */
+    async function getAuthToken() {
+        if (location.hostname === 'lms.dgut.edu.cn') {
+            const match = document.cookie.match(/AUTHORIZATION=([^;]+)/);
+            if (match) return match[1];
+        }
+        const gmCookieToken = await new Promise((resolve) => {
+            if (typeof GM_cookie === 'undefined' || !GM_cookie.list) return resolve(null);
+            GM_cookie.list({ url: API_HOST, name: 'AUTHORIZATION' }, (cookies, error) => {
+                resolve(error || !cookies || cookies.length === 0 ? null : cookies[0].value);
+            });
+        });
+        if (gmCookieToken) return gmCookieToken;
+        return GM_getValue(MANUAL_TOKEN_KEY, '');
+    }
+
+    function parseJwt(token) {
+        try {
+            const parts = String(token).split('.');
+            if (parts.length !== 3) return null;
+            const pad = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+            return JSON.parse(atob(pad + '='.repeat((4 - pad.length % 4) % 4)));
+        } catch (e) { return null; }
+    }
+
+    async function checkAuthToken() {
+        const result = { present: false, source: null, expired: false, payload: null, token: null };
+        try {
+            const tok = await getAuthToken();
+            if (!tok) return result;
+            result.present = true;
+            result.token = tok;
+            const cookieMatch = document.cookie.match(/AUTHORIZATION=([^;]+)/);
+            if (cookieMatch && cookieMatch[1] === tok) result.source = 'document.cookie';
+            else if (GM_getValue(MANUAL_TOKEN_KEY, '') === tok) result.source = '手动输入';
+            else result.source = 'GM_cookie / 缓存';
+            const p = parseJwt(tok);
+            if (p) {
+                result.payload = p;
+                if (p.exp && Date.now() > p.exp * 1000) result.expired = true;
+            }
+        } catch (e) {}
+        return result;
+    }
+
+    /* ============================================================
+     * 自检
+     * ============================================================ */
+    function selfCheck() {
+        const results = [];
+        const push = (name, ok, errDef, detail) => results.push({ name, ok, errDef, detail });
+
+        push('marked (MD 渲染)',   typeof marked !== 'undefined',                                   ERR.DOC_NO_MARKED);
+        push('jQuery',             typeof jQuery !== 'undefined' || typeof $ !== 'undefined',       ERR.COURSE_NO_JQ);
+        push('GM_xmlhttpRequest',  typeof GM_xmlhttpRequest === 'function',                         ERR.CORE_NO_GM_XHR);
+        push('GM_cookie',          typeof GM_cookie !== 'undefined' && typeof GM_cookie.list === 'function', ERR.CORE_NO_GM_COOKIE);
+        push('GM_setValue',        typeof GM_setValue === 'function',                               ERR.CORE_NO_GM_STORE);
+        push('GM_getValue',        typeof GM_getValue === 'function',                               ERR.CORE_NO_GM_STORE);
+        push('GM_registerMenuCommand', typeof GM_registerMenuCommand === 'function',                ERR.CORE_NO_GM_STORE);
+        push('unsafeWindow',       typeof unsafeWindow !== 'undefined',                             ERR.CORE_NO_UNSAFE);
+        push('Web Worker',         typeof Worker === 'function',                                    { code: 8846, msg: 'Web Worker 不可用（图片处理将退回主线程）' });
+
+        const passed = results.filter(r => r.ok).length;
+        console.log(TAG, '========== 自检开始 ==========');
+        console.log(TAG, `通过 ${passed}/${results.length}，失败 ${results.length - passed} 项`);
+        results.forEach(r => {
+            if (r.ok) console.log(TAG, `[自检] ✓ ${r.name}`);
+            else console.warn(TAG, `[自检] ✗ ${errTag(r.errDef)} ${r.name} 未就绪`);
+        });
+
+        const host = location.hostname;
+        const isLms = /(^|\.)dgut\.edu\.cn$/i.test(host) || /(^|\.)ulearning\.cn$/i.test(host);
+        console.log(TAG, `[自检] 当前域 ${host} ${isLms ? '✓ 属于优学院环境' : '⚠ 不在优学院环境中（部分功能不可用）'}`);
+
+        const ifr = detectIframe();
+        console.log(TAG, `[自检] ${ifr.isTop ? '✓ 顶层窗口' : '⚠ iframe 环境（刷课/读书建议在顶层打开）'}`);
+        if (ifr.hasVideo) console.log(TAG, `[自检] ✓ 本帧存在 video 元素`);
+        if (ifr.hasVM) console.log(TAG, `[自检] ✓ 本帧存在 koLearnCourseViewModel`);
+        if (ifr.hasKo) console.log(TAG, `[自检] ✓ 本帧存在 ko`);
+        console.log(TAG, '========== 自检结束 ==========');
+
+        window.__dgutSelfCheckResults = results;
+        return results;
+    }
+    setTimeout(selfCheck, 800);
+
+    setTimeout(async function asyncSelfCheck() {
+        console.log(TAG, '========== 异步自检开始 ==========');
+        try {
+            const auth = await checkAuthToken();
+            if (!auth.present) {
+                console.warn(TAG, `[自检] ✗ ${errTag(ERR.SIGN_NO_TOKEN)} 未获取到 Token（可能未登录）`);
+            } else {
+                const expStr = (auth.payload && auth.payload.exp) ? new Date(auth.payload.exp * 1000).toLocaleString() : '无 exp';
+                if (auth.expired) console.warn(TAG, `[自检] ✗ ${errTag(ERR.SIGN_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
+                else console.log(TAG, `[自检] ✓ Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
+            }
+        } catch (e) {}
+
+        try {
+            const uid = await signResolveUserId();
+            if (uid) {
+                const src = gSignUserIdSource || '未知';
+                const conf = gSignUserIdConfidence || '未知';
+                const lvl = conf === 'high' ? '✓' : conf === 'medium' ? '⚠' : '✗';
+                console.log(TAG, `[自检] ${lvl} userid = ${uid}（来源：${src}，置信度：${conf}）`);
+                if (conf === 'low') console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_USERID_LOWCONF)}`);
+            } else {
+                console.warn(TAG, `[自检] ✗ ${errTag(ERR.SIGN_NO_USERID)} 未获取到 userid`);
+            }
+        } catch (e) {}
+
+        console.log(TAG, '========== 异步自检结束 ==========');
+    }, 1800);
 
     /* ============================================================
      * 主题系统
      * ============================================================ */
-
     const ACCENTS = {
-        purple: {
-            name: '紫罗兰',
-            primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D',
-            dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF',
-            hover: '#57418C', dHover: '#DCC9FF'
-        },
-        blue: {
-            name: '蔚蓝',
-            primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36',
-            dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF',
-            hover: '#00528C', dHover: '#B7D8FF'
-        },
-        teal: {
-            name: '松石',
-            primary: '#006874', container: '#97F0FF', onContainer: '#001F24',
-            dPrimary: '#4FD8EB', dContainer: '#004F59', dOnContainer: '#97F0FF',
-            hover: '#005862', dHover: '#83E4F4'
-        },
-        green: {
-            name: '青绿',
-            primary: '#00696D', container: '#CCE8E7', onContainer: '#002020',
-            dPrimary: '#80D5D4', dContainer: '#004F51', dOnContainer: '#CCE8E7',
-            hover: '#005A5D', dHover: '#A2E0E0'
-        },
-        orange: {
-            name: '琥珀',
-            primary: '#8B5000', container: '#FFDDB8', onContainer: '#2D1600',
-            dPrimary: '#FFB870', dContainer: '#6A3C00', dOnContainer: '#FFDDB8',
-            hover: '#7A4700', dHover: '#FFCB92'
-        },
-        red: {
-            name: '玫红',
-            primary: '#A03253', container: '#FFD9E1', onContainer: '#3E001D',
-            dPrimary: '#FFB1C6', dContainer: '#7D2948', dOnContainer: '#FFD9E1',
-            hover: '#8B2C48', dHover: '#FFC6D6'
-        }
+        purple: { name: '紫罗兰', primary: '#6750A4', container: '#E8DEF8', onContainer: '#21005D', dPrimary: '#D0BCFF', dContainer: '#4F378B', dOnContainer: '#EADDFF', hover: '#57418C', dHover: '#DCC9FF' },
+        blue:   { name: '蔚蓝',   primary: '#0061A4', container: '#D1E4FF', onContainer: '#001D36', dPrimary: '#9ECAFF', dContainer: '#00497D', dOnContainer: '#D1E4FF', hover: '#00528C', dHover: '#B7D8FF' },
+        teal:   { name: '松石',   primary: '#006874', container: '#97F0FF', onContainer: '#001F24', dPrimary: '#4FD8EB', dContainer: '#004F59', dOnContainer: '#97F0FF', hover: '#005862', dHover: '#83E4F4' },
+        green:  { name: '青绿',   primary: '#00696D', container: '#CCE8E7', onContainer: '#002020', dPrimary: '#80D5D4', dContainer: '#004F51', dOnContainer: '#CCE8E7', hover: '#005A5D', dHover: '#A2E0E0' },
+        orange: { name: '琥珀',   primary: '#8B5000', container: '#FFDDB8', onContainer: '#2D1600', dPrimary: '#FFB870', dContainer: '#6A3C00', dOnContainer: '#FFDDB8', hover: '#7A4700', dHover: '#FFCB92' },
+        red:    { name: '玫红',   primary: '#A03253', container: '#FFD9E1', onContainer: '#3E001D', dPrimary: '#FFB1C6', dContainer: '#7D2948', dOnContainer: '#FFD9E1', hover: '#8B2C48', dHover: '#FFC6D6' }
     };
 
     function resolvedThemeMode() {
@@ -162,13 +459,11 @@
         if (!m || m === 'auto') return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
         return m === 'dark' ? 'dark' : 'light';
     }
-
     function accentOf(id) {
         if (ACCENTS[id]) return ACCENTS[id];
         const hex = /^#([0-9a-f]{6})$/i.test(String(id)) ? id : '#6750A4';
         return {
-            name: '自定义',
-            primary: hex,
+            name: '自定义', primary: hex,
             container: `color-mix(in srgb, ${hex} 18%, #ffffff)`,
             onContainer: `color-mix(in srgb, ${hex} 70%, #000000)`,
             dPrimary: `color-mix(in srgb, ${hex} 62%, #ffffff)`,
@@ -178,72 +473,40 @@
             dHover: `color-mix(in srgb, ${hex} 78%, #ffffff)`
         };
     }
-
     function themeTokens() {
         const dark = resolvedThemeMode() === 'dark';
         const a = accentOf(GM_getValue(ACCENT_KEY, 'purple'));
-
         const light = {
-            surface: '#FEF7FF',
-            surface2: '#F7F2FA',
-            surface3: '#FFFFFF',
-            onSurface: '#1D1B20',
-            onSurfaceVariant: '#49454E',
-            outline: '#79747E',
-            outlineVariant: '#E7E0EC',
-            secondaryContainer: '#F3EDF7',
-            onSecondaryContainer: '#1D192B',
-            error: '#B3261E',
-            errorContainer: '#FFEBEE',
-            onErrorContainer: '#721C24',
-            success: '#2E7D32',
-            successContainer: '#E8F5E9',
-            onSuccessContainer: '#1B5E20',
-            warn: '#8B5000',
-            warnContainer: '#FFF3E0',
-            onWarnContainer: '#7A4400',
-            inputBg: '#F3EDF7',
-            hoverOverlay: 'rgba(0,0,0,.04)',
-            onPrimary: '#FFFFFF'
+            surface: '#FEF7FF', surface2: '#F7F2FA', surface3: '#FFFFFF',
+            onSurface: '#1D1B20', onSurfaceVariant: '#49454E',
+            outline: '#79747E', outlineVariant: '#E7E0EC',
+            secondaryContainer: '#F3EDF7', onSecondaryContainer: '#1D192B',
+            error: '#B3261E', errorContainer: '#FFEBEE', onErrorContainer: '#721C24',
+            success: '#2E7D32', successContainer: '#E8F5E9', onSuccessContainer: '#1B5E20',
+            warn: '#8B5000', warnContainer: '#FFF3E0', onWarnContainer: '#7A4400',
+            inputBg: '#F3EDF7', hoverOverlay: 'rgba(0,0,0,.04)', onPrimary: '#FFFFFF'
         };
         const darkBase = {
-            surface: '#141218',
-            surface2: '#1F1D24',
-            surface3: '#2B2930',
-            onSurface: '#E6E0E9',
-            onSurfaceVariant: '#CAC4D0',
-            outline: '#938F99',
-            outlineVariant: '#49454E',
-            secondaryContainer: '#4A4458',
-            onSecondaryContainer: '#E8DEF8',
-            error: '#F2B8B5',
-            errorContainer: '#8C1D18',
-            onErrorContainer: '#F9DEDC',
-            success: '#A5D6A7',
-            successContainer: '#1B4D22',
-            onSuccessContainer: '#B8E5BA',
-            warn: '#FFB870',
-            warnContainer: '#5C3600',
-            onWarnContainer: '#FFDDB8',
-            inputBg: '#1F1D24',
-            hoverOverlay: 'rgba(255,255,255,.06)',
-            onPrimary: '#21005D'
+            surface: '#141218', surface2: '#1F1D24', surface3: '#2B2930',
+            onSurface: '#E6E0E9', onSurfaceVariant: '#CAC4D0',
+            outline: '#938F99', outlineVariant: '#49454E',
+            secondaryContainer: '#4A4458', onSecondaryContainer: '#E8DEF8',
+            error: '#F2B8B5', errorContainer: '#8C1D18', onErrorContainer: '#F9DEDC',
+            success: '#A5D6A7', successContainer: '#1B4D22', onSuccessContainer: '#B8E5BA',
+            warn: '#FFB870', warnContainer: '#5C3600', onWarnContainer: '#FFDDB8',
+            inputBg: '#1F1D24', hoverOverlay: 'rgba(255,255,255,.06)', onPrimary: '#21005D'
         };
-
         const base = dark ? darkBase : light;
-
         const infoContainer = dark
             ? `color-mix(in srgb, ${a.dContainer} 60%, ${base.surface})`
             : `color-mix(in srgb, ${a.container} 62%, ${base.surface3})`;
         const onInfoContainer = dark ? a.dOnContainer : a.onContainer;
-
         return Object.assign(base, {
             primary: dark ? a.dPrimary : a.primary,
             primaryHover: dark ? a.dHover : a.hover,
             container: dark ? a.dContainer : a.container,
             onContainer: dark ? a.dOnContainer : a.onContainer,
-            infoContainer,
-            onInfoContainer
+            infoContainer, onInfoContainer
         });
     }
 
@@ -251,10 +514,8 @@
         const dark = resolvedThemeMode() === 'dark';
         const t = themeTokens();
         document.documentElement.classList.toggle('dgut-theme-dark', dark);
-
         let style = document.getElementById('dgut-theme-style');
         if (!style) { style = document.createElement('style'); style.id = 'dgut-theme-style'; document.head.appendChild(style); }
-
         style.textContent = `
             :root, html.dgut-theme-dark {
                 --dgut-primary: ${t.primary};
@@ -318,18 +579,6 @@
 
     const KAO = { ok: '(｡•̀ᴗ-)✧', zen: '(－‿－)', sweat: '(；´д｀)' };
 
-    function escapeHtml(str) {
-        if (typeof str !== 'string') return '';
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-    function dateKey(d = new Date()) {
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-    function formatDate(date) {
-        const d = new Date(date);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    }
-
     function showStatus(msg, isError = false) {
         const el = document.getElementById('dgut-status-bar');
         if (!el) return;
@@ -347,18 +596,12 @@
         const tick = () => {
             const secs = Math.round((Date.now() - t0) / 1000);
             const msg = secs < 1 ? `${baseText}…` : `${baseText}…（已等待 ${secs} 秒）`;
-            if (el) {
-                el.textContent = msg;
-                el.classList.remove('dgut-status-error');
-                el.style.display = 'block';
-            }
+            if (el) { el.textContent = msg; el.classList.remove('dgut-status-error'); el.style.display = 'block'; }
         };
         tick();
         gStatusTicker = setInterval(tick, 1000);
     }
-    function stopStatusTicker() {
-        if (gStatusTicker) { clearInterval(gStatusTicker); gStatusTicker = null; }
-    }
+    function stopStatusTicker() { if (gStatusTicker) { clearInterval(gStatusTicker); gStatusTicker = null; } }
 
     const icons = {
         list: `<svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 8h14v-2H7v-2zM7 7v2h14V7H7z"/></svg>`,
@@ -367,7 +610,6 @@
         upload: `<svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>`,
         settings: `<svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`,
         close: `<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`,
-        left: `<svg viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>`,
         add: `<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>`,
         sign: `<svg viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`,
         course: `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`,
@@ -375,396 +617,110 @@
         read: `<svg viewBox="0 0 24 24"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H6V4h2v8l2.5-1.5L13 12V4h5v16z"/></svg>`,
         theme: `<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>`,
         doc: `<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`,
-        sign2: `<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>`
+        info: `<svg viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>`
     };
 
-    /* ---------- 全局静态样式 ---------- */
     GM_addStyle(`
         @keyframes dgutPulse {0%,100%{filter:brightness(1)}50%{filter:brightness(1.15)}}
         @keyframes dgutDown {from{transform:translate(-50%,-120%);opacity:0}to{transform:translate(-50%,0);opacity:1}}
         @keyframes dgutShrinkX {from{transform:scaleX(1)}to{transform:scaleX(0)}}
-
-        .dgut-card {
-            background: var(--dgut-surface-3);
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 14px;
-            padding: 16px;
-            margin-bottom: 12px;
-            color: var(--dgut-on-surface);
-            transition: background .15s, border-color .15s;
-        }
+        .dgut-card { background: var(--dgut-surface-3); border: 1px solid var(--dgut-outline-variant); border-radius: 14px; padding: 16px; margin-bottom: 12px; color: var(--dgut-on-surface); transition: background .15s, border-color .15s; }
         .dgut-card--tight { padding: 12px; }
         .dgut-card:last-child { margin-bottom: 0; }
-
-        .dgut-hint {
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 12px;
-            padding: 10px 14px;
-            font-size: 12px;
-            line-height: 1.7;
-            background: var(--dgut-info-container);
-            color: var(--dgut-on-info-container);
-            margin-bottom: 12px;
-        }
-        .dgut-hint--info { background: var(--dgut-info-container); color: var(--dgut-on-info-container); }
+        .dgut-hint { border: 1px solid var(--dgut-outline-variant); border-radius: 12px; padding: 10px 14px; font-size: 12px; line-height: 1.7; background: var(--dgut-info-container); color: var(--dgut-on-info-container); margin-bottom: 12px; }
         .dgut-hint--success { background: var(--dgut-success-container); color: var(--dgut-on-success-container); }
         .dgut-hint--warn { background: var(--dgut-warn-container); color: var(--dgut-on-warn-container); }
-        .dgut-hint--error { background: var(--dgut-error-container); color: var(--dgut-on-error-container); }
-        .dgut-hint b { color: inherit; }
-        .dgut-hint code {
-            font-family: Consolas, "Courier New", monospace;
-            background: var(--dgut-hover-overlay);
-            padding: 1px 5px;
-            border-radius: 4px;
-            font-size: 11px;
-        }
-
-        .dgut-section-title {
-            font-size: 13px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            color: var(--dgut-on-surface);
-        }
-
+        .dgut-hint code { font-family: Consolas, "Courier New", monospace; background: var(--dgut-hover-overlay); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+        .dgut-section-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--dgut-on-surface); }
         .dgut-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
         .dgut-row--end { justify-content: flex-end; }
         .dgut-row--mb { margin-bottom: 10px; }
-
-        .dgut-label {
-            font-size: 13px;
-            color: var(--dgut-on-surface-variant);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
+        .dgut-label { font-size: 13px; color: var(--dgut-on-surface-variant); display: inline-flex; align-items: center; gap: 6px; }
         .dgut-label input[type="checkbox"] { accent-color: var(--dgut-primary); }
-
-        .dgut-input, .dgut-textarea, .dgut-select {
-            padding: 8px 12px;
-            border: 1px solid var(--dgut-outline);
-            border-radius: 10px;
-            background: var(--dgut-input-bg);
-            color: var(--dgut-on-surface);
-            font-size: 13px;
-            outline: none;
-            box-sizing: border-box;
-            font-family: inherit;
-            transition: border-color .15s, background .15s;
-        }
+        .dgut-input, .dgut-textarea, .dgut-select { padding: 8px 12px; border: 1px solid var(--dgut-outline); border-radius: 10px; background: var(--dgut-input-bg); color: var(--dgut-on-surface); font-size: 13px; outline: none; box-sizing: border-box; font-family: inherit; transition: border-color .15s, background .15s; }
         .dgut-input:focus, .dgut-textarea:focus, .dgut-select:focus { border-color: var(--dgut-primary); }
         .dgut-input:disabled { opacity: .55; cursor: not-allowed; }
         .dgut-input::placeholder, .dgut-textarea::placeholder { color: var(--dgut-outline); }
-
-        .dgut-log {
-            max-height: 240px;
-            overflow-y: auto;
-            font-size: 12px;
-            background: var(--dgut-surface-2);
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 10px;
-            padding: 8px 10px;
-            color: var(--dgut-on-surface);
-            line-height: 1.7;
-        }
+        .dgut-log { max-height: 240px; overflow-y: auto; font-size: 12px; background: var(--dgut-surface-2); border: 1px solid var(--dgut-outline-variant); border-radius: 10px; padding: 8px 10px; color: var(--dgut-on-surface); line-height: 1.7; }
         .dgut-log-line { line-height: 1.7; word-break: break-all; }
         .dgut-log-line.log-success { color: var(--dgut-success); }
         .dgut-log-line.log-warn { color: var(--dgut-error); }
         .dgut-log-line.log-muted { color: var(--dgut-on-surface-variant); }
-        .dgut-log-line.log-info { color: var(--dgut-on-surface); }
-
-        .dgut-btn {
-            display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-            padding: 7px 13px; border: none; border-radius: 999px;
-            background: var(--dgut-secondary-container); color: var(--dgut-on-secondary-container);
-            font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
-            transition: background .15s, color .15s, box-shadow .15s;
-            font-family: inherit;
-        }
+        .dgut-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 13px; border: none; border-radius: 999px; background: var(--dgut-secondary-container); color: var(--dgut-on-secondary-container); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, box-shadow .15s; font-family: inherit; }
         .dgut-btn:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
         .dgut-btn:disabled { opacity: .6; cursor: progress; }
         .dgut-btn-primary { background: var(--dgut-primary); color: var(--dgut-on-primary); }
         .dgut-btn-primary:hover { background: var(--dgut-primary-hover); color: var(--dgut-on-primary); }
         .dgut-btn svg, .dgut-ico svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
-
-        .dgut-nav {
-            display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
-            padding: 9px 10px; border: none; border-radius: 10px; background: transparent;
-            font-size: 12px; font-weight: 500; color: var(--dgut-on-surface-variant);
-            cursor: pointer; user-select: none; text-align: left; white-space: nowrap;
-            transition: background .15s, color .15s;
-            font-family: inherit;
-        }
+        .dgut-nav { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 9px 10px; border: none; border-radius: 10px; background: transparent; font-size: 12px; font-weight: 500; color: var(--dgut-on-surface-variant); cursor: pointer; user-select: none; text-align: left; white-space: nowrap; transition: background .15s, color .15s; font-family: inherit; }
         .dgut-nav svg { width: 16px; height: 16px; fill: currentColor; flex: none; }
         .dgut-nav:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
         .dgut-nav.dgut-tab-active { background: var(--dgut-primary-container); color: var(--dgut-primary); font-weight: 700; }
-        .dgut-nav-label {
-            font-size: 10px; font-weight: 700; color: var(--dgut-outline);
-            letter-spacing: .6px; padding: 12px 10px 4px; user-select: none;
-        }
-
-        #dgut-status-bar {
-            padding: 6px 12px; font-size: 11px;
-            border-top: 1px solid var(--dgut-outline-variant);
-            background: var(--dgut-surface-2);
-            color: var(--dgut-on-surface-variant);
-        }
-        #dgut-status-bar.dgut-status-error {
-            color: var(--dgut-error);
-            background: var(--dgut-error-container);
-        }
-
-        #dgut-sign-courses, .dgut-list-box {
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .dgut-sign-course {
-            display: block; width: 100%; text-align: left; margin-bottom: 4px;
-            padding: 8px 10px;
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 10px;
-            background: var(--dgut-surface-3);
-            cursor: pointer;
-            font-size: 13px;
-            color: var(--dgut-on-surface);
-            font-family: inherit;
-            transition: background .15s, border-color .15s, color .15s;
-        }
+        .dgut-nav-label { font-size: 10px; font-weight: 700; color: var(--dgut-outline); letter-spacing: .6px; padding: 12px 10px 4px; user-select: none; }
+        #dgut-status-bar { padding: 6px 12px; font-size: 11px; border-top: 1px solid var(--dgut-outline-variant); background: var(--dgut-surface-2); color: var(--dgut-on-surface-variant); }
+        #dgut-status-bar.dgut-status-error { color: var(--dgut-error); background: var(--dgut-error-container); }
+        .dgut-list-box { max-height: 200px; overflow-y: auto; }
+        .dgut-sign-course { display: block; width: 100%; text-align: left; margin-bottom: 4px; padding: 8px 10px; border: 1px solid var(--dgut-outline-variant); border-radius: 10px; background: var(--dgut-surface-3); cursor: pointer; font-size: 13px; color: var(--dgut-on-surface); font-family: inherit; transition: background .15s, border-color .15s, color .15s; }
         .dgut-sign-course:hover { background: var(--dgut-secondary-container); }
-        .dgut-sign-course.active {
-            border-color: var(--dgut-primary);
-            background: var(--dgut-primary-container);
-            color: var(--dgut-on-primary-container);
-        }
-        .dgut-sign-course .course-meta {
-            color: var(--dgut-on-surface-variant);
-            font-size: 11px;
-            margin-left: 6px;
-        }
-        .dgut-sign-course.active .course-meta { color: var(--dgut-on-primary-container); opacity: .8; }
-
-        .dgut-peer-card {
-            border-radius: 12px;
-            padding: 10px 14px;
-            margin-bottom: 10px;
-            background: var(--dgut-surface-2);
-            color: var(--dgut-on-surface);
-            border: 1px solid var(--dgut-outline-variant);
-        }
-        .dgut-peer-card.peer-low {
-            background: color-mix(in srgb, var(--dgut-error) 14%, var(--dgut-surface-3));
-            border-color: color-mix(in srgb, var(--dgut-error) 30%, var(--dgut-outline-variant));
-        }
-        .dgut-peer-card.peer-mid {
-            background: color-mix(in srgb, var(--dgut-warn) 16%, var(--dgut-surface-3));
-            border-color: color-mix(in srgb, var(--dgut-warn) 30%, var(--dgut-outline-variant));
-        }
-        .dgut-peer-card.peer-high {
-            background: color-mix(in srgb, var(--dgut-success) 12%, var(--dgut-surface-3));
-            border-color: color-mix(in srgb, var(--dgut-success) 26%, var(--dgut-outline-variant));
-        }
+        .dgut-sign-course.active { border-color: var(--dgut-primary); background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
+        .dgut-sign-course .course-meta { color: var(--dgut-on-surface-variant); font-size: 11px; margin-left: 6px; }
+        .dgut-peer-card { border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; background: var(--dgut-surface-2); color: var(--dgut-on-surface); border: 1px solid var(--dgut-outline-variant); }
+        .dgut-peer-card.peer-low { background: color-mix(in srgb, var(--dgut-error) 14%, var(--dgut-surface-3)); }
+        .dgut-peer-card.peer-mid { background: color-mix(in srgb, var(--dgut-warn) 16%, var(--dgut-surface-3)); }
+        .dgut-peer-card.peer-high { background: color-mix(in srgb, var(--dgut-success) 12%, var(--dgut-surface-3)); }
         .dgut-peer-card .peer-name { font-size: 15px; font-weight: 600; }
         .dgut-peer-card .peer-score { font-size: 15px; font-weight: 600; }
         .dgut-peer-card .peer-hw { font-size: 12px; opacity: .85; margin: 4px 0 6px; }
         .dgut-peer-card .peer-content { font-size: 13px; line-height: 1.4; margin-bottom: 6px; }
-        .dgut-peer-card .peer-foot {
-            font-size: 11px; opacity: .7;
-            border-top: 1px solid var(--dgut-hover-overlay);
-            padding-top: 5px;
-            display: flex; justify-content: space-between;
-        }
-
-        #dgut-toast-card {
-            position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
-            z-index: 2147483645;
-            min-width: 340px; max-width: 92vw;
-            background: var(--dgut-surface-3);
-            color: var(--dgut-on-surface);
-            padding: 16px 20px 20px;
-            border-radius: 16px;
-            box-shadow: 0 8px 32px rgba(0,0,0,.45);
-            font-family: var(--dgut-font);
-            cursor: pointer;
-            border-left: 6px solid var(--dgut-primary);
-            animation: dgutDown .35s cubic-bezier(.2,.8,.2,1);
-            overflow: hidden;
-        }
+        .dgut-peer-card .peer-foot { font-size: 11px; opacity: .7; border-top: 1px solid var(--dgut-hover-overlay); padding-top: 5px; display: flex; justify-content: space-between; }
+        #dgut-toast-card { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); z-index: 2147483645; min-width: 340px; max-width: 92vw; background: var(--dgut-surface-3); color: var(--dgut-on-surface); padding: 16px 20px 20px; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.45); font-family: var(--dgut-font); cursor: pointer; border-left: 6px solid var(--dgut-primary); animation: dgutDown .35s cubic-bezier(.2,.8,.2,1); overflow: hidden; }
         .dgut-toast-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
         .dgut-toast-body { font-size: 14px; color: var(--dgut-on-surface-variant); line-height: 1.5; }
         .dgut-toast-sub { font-size: 12px; color: var(--dgut-outline); margin-top: 6px; }
-        .dgut-toast-progress {
-            position: absolute; left: 0; bottom: 0; height: 3px;
-            background: var(--dgut-primary);
-            width: 100%; transform-origin: left;
-            animation: dgutShrinkX linear forwards;
-        }
-
-        .dgut-sig-card {
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 10px;
-            padding: 6px;
-            background: var(--dgut-surface-2);
-            display: flex; flex-direction: column; gap: 4px;
-            width: 150px; box-sizing: border-box;
-        }
-        .dgut-sig-card img {
-            width: 100%; height: 56px; object-fit: contain;
-            background: #fff;
-            border-radius: 6px;
-        }
-        .dgut-sig-card .dgut-sig-meta {
-            font-size: 11px; color: var(--dgut-on-surface-variant);
-            display: flex; align-items: center; gap: 6px;
-        }
-        .dgut-sig-del {
-            cursor: pointer;
-            color: var(--dgut-error);
-            font-weight: 700; font-size: 14px; line-height: 1;
-        }
-
-        /* ---------- Markdown 预览框 ---------- */
-        #dgut-doc-preview-box {
-            margin-top: 10px; padding: 12px 14px;
-            background: var(--dgut-surface-2);
-            border: 1px solid var(--dgut-outline-variant);
-            border-radius: 10px;
-            font-size: 13px; line-height: 1.7;
-            max-height: 340px; overflow: auto;
-            color: var(--dgut-on-surface);
-        }
-        #dgut-doc-preview-box h1,
-        #dgut-doc-preview-box h2,
-        #dgut-doc-preview-box h3,
-        #dgut-doc-preview-box h4,
-        #dgut-doc-preview-box h5,
-        #dgut-doc-preview-box h6 {
-            margin: 12px 0 8px;
-            color: var(--dgut-on-surface);
-            line-height: 1.3;
-            font-weight: 700;
-        }
+        .dgut-toast-progress { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--dgut-primary); width: 100%; transform-origin: left; animation: dgutShrinkX linear forwards; }
+        .dgut-sig-card { border: 1px solid var(--dgut-outline-variant); border-radius: 10px; padding: 6px; background: var(--dgut-surface-2); display: flex; flex-direction: column; gap: 4px; width: 150px; box-sizing: border-box; }
+        .dgut-sig-card img { width: 100%; height: 56px; object-fit: contain; background: #fff; border-radius: 6px; }
+        .dgut-sig-card .dgut-sig-meta { font-size: 11px; color: var(--dgut-on-surface-variant); display: flex; align-items: center; gap: 6px; }
+        .dgut-sig-del { cursor: pointer; color: var(--dgut-error); font-weight: 700; font-size: 14px; line-height: 1; }
+        #dgut-doc-preview-box { margin-top: 10px; padding: 12px 14px; background: var(--dgut-surface-2); border: 1px solid var(--dgut-outline-variant); border-radius: 10px; font-size: 13px; line-height: 1.7; max-height: 340px; overflow: auto; color: var(--dgut-on-surface); }
+        #dgut-doc-preview-box h1, #dgut-doc-preview-box h2, #dgut-doc-preview-box h3 { margin: 12px 0 8px; color: var(--dgut-on-surface); line-height: 1.3; font-weight: 700; }
         #dgut-doc-preview-box h1 { font-size: 20px; border-bottom: 1px solid var(--dgut-outline-variant); padding-bottom: 6px; }
-        #dgut-doc-preview-box h2 { font-size: 17px; }
-        #dgut-doc-preview-box h3 { font-size: 15px; }
-        #dgut-doc-preview-box h4 { font-size: 14px; }
-        #dgut-doc-preview-box p { margin: 6px 0; }
-        #dgut-doc-preview-box ul,
-        #dgut-doc-preview-box ol { padding-left: 24px; margin: 6px 0; }
-        #dgut-doc-preview-box li { margin: 2px 0; }
-        #dgut-doc-preview-box blockquote {
-            border-left: 4px solid var(--dgut-primary);
-            background: var(--dgut-surface-3);
-            color: var(--dgut-on-surface-variant);
-            padding: 6px 14px;
-            margin: 10px 0;
-            border-radius: 0 6px 6px 0;
-        }
-        #dgut-doc-preview-box blockquote p { margin: 4px 0; }
-        #dgut-doc-preview-box pre,
-        #dgut-doc-preview-box code {
-            background: var(--dgut-hover-overlay);
-            padding: 2px 6px; border-radius: 4px;
-            font-family: Consolas, "Courier New", monospace;
-            font-size: 12px;
-        }
+        #dgut-doc-preview-box h2 { font-size: 17px; } #dgut-doc-preview-box h3 { font-size: 15px; }
+        #dgut-doc-preview-box blockquote { border-left: 4px solid var(--dgut-primary); background: var(--dgut-surface-3); color: var(--dgut-on-surface-variant); padding: 6px 14px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+        #dgut-doc-preview-box pre, #dgut-doc-preview-box code { background: var(--dgut-hover-overlay); padding: 2px 6px; border-radius: 4px; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
         #dgut-doc-preview-box pre { padding: 10px 12px; overflow-x: auto; border-radius: 6px; }
-        #dgut-doc-preview-box pre code { background: transparent; padding: 0; }
-        #dgut-doc-preview-box table {
-            border-collapse: collapse; margin: 8px 0;
-            border: 1px solid var(--dgut-outline-variant);
-        }
-        #dgut-doc-preview-box th,
-        #dgut-doc-preview-box td {
-            border: 1px solid var(--dgut-outline-variant);
-            padding: 5px 10px;
-        }
+        #dgut-doc-preview-box table { border-collapse: collapse; margin: 8px 0; border: 1px solid var(--dgut-outline-variant); }
+        #dgut-doc-preview-box th, #dgut-doc-preview-box td { border: 1px solid var(--dgut-outline-variant); padding: 5px 10px; }
         #dgut-doc-preview-box th { background: var(--dgut-secondary-container); }
-        #dgut-doc-preview-box a { color: var(--dgut-primary); text-decoration: underline; }
         #dgut-doc-preview-box img { max-width: 100%; height: auto; border-radius: 6px; }
-        #dgut-doc-preview-box hr {
-            border: none; border-top: 1px solid var(--dgut-outline-variant);
-            margin: 12px 0;
-        }
-
-        #dgut-sig-canvas {
-            width: 100%; height: 180px;
-            background: var(--dgut-surface-3);
-            border: 2px dashed var(--dgut-outline);
-            border-radius: 10px;
-            touch-action: none; display: block; cursor: crosshair;
-            box-sizing: border-box;
-        }
-
-        #dgut-mini-panel {
-            position: fixed;
-            z-index: 2147483001;
-            width: 80px; height: 80px;
-            border-radius: 18px;
-            background: var(--dgut-surface-3);
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; user-select: none;
-            border: 2px solid var(--dgut-primary-container);
-            box-shadow: 0 2px 10px rgba(0,0,0,.15);
-            transition: box-shadow .2s, transform .2s, border-color .2s, background .2s;
-        }
+        #dgut-sig-canvas { width: 100%; height: 180px; background: var(--dgut-surface-3); border: 2px dashed var(--dgut-outline); border-radius: 10px; touch-action: none; display: block; cursor: crosshair; box-sizing: border-box; }
+        #dgut-mini-panel { position: fixed; z-index: 2147483001; width: 80px; height: 80px; border-radius: 18px; background: var(--dgut-surface-3); display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; border: 2px solid var(--dgut-primary-container); box-shadow: 0 2px 10px rgba(0,0,0,.15); transition: box-shadow .2s, transform .2s, border-color .2s, background .2s; }
         #dgut-mini-panel svg { display: block; }
         #dgut-mini-panel .mini-ring { stroke: var(--dgut-primary); }
         #dgut-mini-panel .mini-check { stroke: var(--dgut-primary); }
-        #dgut-mini-panel:hover {
-            box-shadow: 0 4px 16px color-mix(in srgb, var(--dgut-primary) 40%, transparent);
-            transform: scale(1.06);
-        }
-
-        #dgut-main-panel {
-            position: fixed; z-index: 2147483000;
-            width: 780px; max-width: 98vw;
-            background: var(--dgut-surface);
-            color: var(--dgut-on-surface);
-            border-radius: 16px;
-            box-shadow: 0 8px 30px rgba(0,0,0,.35);
-            font-family: var(--dgut-font);
-            overflow: hidden;
-            border: 1px solid var(--dgut-outline-variant);
-            display: flex; flex-direction: column;
-        }
-        #dgut-panel-header {
-            display: flex; align-items: center; gap: 10px;
-            padding: 12px 14px;
-            background: var(--dgut-primary);
-            color: var(--dgut-on-primary);
-            cursor: move; user-select: none;
-        }
+        #dgut-mini-panel:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--dgut-primary) 40%, transparent); transform: scale(1.06); }
+        #dgut-main-panel { position: fixed; z-index: 2147483000; width: 780px; max-width: 98vw; background: var(--dgut-surface); color: var(--dgut-on-surface); border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.35); font-family: var(--dgut-font); overflow: hidden; border: 1px solid var(--dgut-outline-variant); display: flex; flex-direction: column; }
+        #dgut-panel-header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--dgut-primary); color: var(--dgut-on-primary); cursor: move; user-select: none; }
         #dgut-panel-header .panel-title { font-size: 14px; font-weight: 700; line-height: 1.25; }
-        #dgut-panel-close {
-            border: none;
-            background: color-mix(in srgb, var(--dgut-on-primary) 20%, transparent);
-            color: var(--dgut-on-primary);
-            width: 30px; height: 30px; border-radius: 50%;
-            font-size: 17px; line-height: 1; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            flex: none; transition: background .15s;
-            font-family: inherit;
-        }
+        #dgut-panel-close { border: none; background: color-mix(in srgb, var(--dgut-on-primary) 20%, transparent); color: var(--dgut-on-primary); width: 30px; height: 30px; border-radius: 50%; font-size: 17px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex: none; transition: background .15s; font-family: inherit; }
         #dgut-panel-close:hover { background: color-mix(in srgb, var(--dgut-on-primary) 32%, transparent); }
-        #dgut-sidebar {
-            width: 158px; flex: none;
-            background: var(--dgut-surface-2);
-            border-right: 1px solid var(--dgut-outline-variant);
-            padding: 10px 8px;
-            display: flex; flex-direction: column; gap: 2px;
-            overflow-y: auto;
-        }
-        #dgut-panel-body {
-            flex: 1; min-width: 0;
-            overflow-y: auto;
-            padding: 10px 12px;
-            max-height: 72vh;
-            background: var(--dgut-surface);
-        }
-        #dgut-panel-footer-version {
-            font-size: 10px;
-            color: var(--dgut-on-surface-variant);
-            text-align: center; padding: 6px 0; opacity: .7;
-        }
+        #dgut-sidebar { width: 158px; flex: none; background: var(--dgut-surface-2); border-right: 1px solid var(--dgut-outline-variant); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+        #dgut-panel-body { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; max-height: 72vh; background: var(--dgut-surface); }
+        #dgut-panel-footer-version { font-size: 10px; color: var(--dgut-on-surface-variant); text-align: center; padding: 6px 0; opacity: .7; }
+        .dgut-tab-bar { display: flex; gap: 4px; border-bottom: 1px solid var(--dgut-outline-variant); margin-bottom: 12px; }
+        .dgut-tab-btn { padding: 8px 14px; border: none; background: transparent; color: var(--dgut-on-surface-variant); font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit; transition: color .15s, border-color .15s; }
+        .dgut-tab-btn:hover { color: var(--dgut-on-surface); }
+        .dgut-tab-btn.active { color: var(--dgut-primary); border-bottom-color: var(--dgut-primary); }
+        .dgut-err-code { font-family: Consolas, "Courier New", monospace; font-weight: 700; color: var(--dgut-error); }
+        .dgut-err-row { display: flex; gap: 12px; padding: 6px 10px; border-bottom: 1px solid var(--dgut-outline-variant); font-size: 12px; line-height: 1.6; }
+        .dgut-err-row:last-child { border-bottom: none; }
+        .dgut-err-row .dgut-err-code { flex: none; min-width: 60px; }
+        .dgut-conf { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+        .dgut-conf-high { background: var(--dgut-success-container); color: var(--dgut-on-success-container); }
+        .dgut-conf-mid  { background: var(--dgut-warn-container); color: var(--dgut-on-warn-container); }
+        .dgut-conf-low  { background: var(--dgut-error-container); color: var(--dgut-on-error-container); }
+        .dgut-link { color: var(--dgut-primary); text-decoration: none; }
+        .dgut-link:hover { text-decoration: underline; }
     `);
 
     let gAudioCtx = null;
@@ -816,23 +772,9 @@
         setTimeout(() => card.remove(), durationMs + 500);
     }
 
-    async function getAuthToken() {
-        if (location.hostname === 'lms.dgut.edu.cn') {
-            const match = document.cookie.match(/AUTHORIZATION=([^;]+)/);
-            if (match) return match[1];
-        }
-        const gmCookieToken = await new Promise((resolve) => {
-            if (typeof GM_cookie === 'undefined' || !GM_cookie.list) return resolve(null);
-            GM_cookie.list({ url: API_HOST, name: 'AUTHORIZATION' }, (cookies, error) => {
-                resolve(error || !cookies || cookies.length === 0 ? null : cookies[0].value);
-            });
-        });
-        if (gmCookieToken) return gmCookieToken;
-        return GM_getValue(MANUAL_TOKEN_KEY, '');
-    }
     async function gmFetchEx(url, opts = {}) {
         const token = await getAuthToken();
-        if (!token) throw new Error('无法获取 Token，请先登录优学院');
+        if (!token) throw new Error(errFull(ERR.SIGN_NO_TOKEN));
         const method = String(opts.method || 'GET').toUpperCase();
         const headers = { 'Accept': 'application/json, text/plain, */*', 'Referer': API_HOST + '/', 'Origin': API_HOST };
         if (opts.headers) Object.assign(headers, opts.headers);
@@ -846,16 +788,20 @@
             GM_xmlhttpRequest({
                 method, url, anonymous: true, headers, data, timeout: 15000,
                 onload: (res) => {
-                    if (res.status >= 400) return reject(new Error('HTTP ' + res.status));
+                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
+                    if (res.status >= 400) return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status)));
                     try { resolve(JSON.parse(res.responseText)); }
-                    catch (e) { reject(new Error('JSON 解析失败: ' + String(res.responseText).slice(0, 120))); }
+                    catch (e) { reject(new Error(errFull(ERR.SIGN_PARSE_FAIL, String(res.responseText).slice(0, 80)))); }
                 },
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('请求超时'))
+                onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
+                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
             });
         });
     }
 
+    /* ============================================================
+     * 签到
+     * ============================================================ */
     const SIGN_LMS_BASE = API_HOST + '/courseapi';
     const SIGN_APP_BASE = 'https://application.dgut.edu.cn/classroomapi';
     const SIGN_KINDS = { 0: '选人点名', 1: '二维码签到', 2: '数字码签到', 3: '一键签到' };
@@ -867,6 +813,8 @@
     const p2 = (n) => String(n).padStart(2, '0');
     let gSignCourses = [];
     let gSignUserId = null;
+    let gSignUserIdSource = null;
+    let gSignUserIdConfidence = null;
     let gSignMonitor = null;
 
     function getSignConfig() { return Object.assign({}, DEFAULT_SIGN_CONFIG, GM_getValue(SIGN_CONFIG_KEY, {}) || {}); }
@@ -875,24 +823,131 @@
 
     async function signResolveUserId() {
         if (gSignUserId) return gSignUserId;
+
+        const manual = Number(GM_getValue(MANUAL_USERID_KEY, 0));
+        if (Number.isFinite(manual) && manual > 0) {
+            gSignUserId = manual; gSignUserIdSource = '手动覆盖'; gSignUserIdConfidence = 'high';
+            return manual;
+        }
+
         let uid = null;
-        const isDgutHost = /(^|\.)dgut\.edu\.cn$/i.test(location.hostname) || /(^|\.)ulearning\.cn$/i.test(location.hostname);
-        if (isDgutHost) {
-            const m = document.cookie.match(/(?:^|;\s*)userid=([^;]+)/);
-            if (m) uid = Number(m[1]) || null;
+
+        // 1. JWT payload（最可靠）
+        try {
+            const token = await getAuthToken();
+            const p = token ? parseJwt(token) : null;
+            if (p) {
+                const v = p.userid || p.userId || p.uid || p.id || p.sub;
+                const n = Number(v);
+                if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'JWT'; gSignUserIdConfidence = 'high'; }
+            }
+        } catch (e) {}
+
+        // 2. document.cookie
+        if (!uid) {
+            try {
+                const ck = document.cookie || '';
+                const names = ['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'];
+                for (const name of names) {
+                    const m = ck.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)', 'i'));
+                    if (!m) continue;
+                    const n = Number(decodeURIComponent(m[1]));
+                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'document.cookie'; gSignUserIdConfidence = 'medium'; break; }
+                }
+            } catch (e) {}
         }
+
+        // 3. GM_cookie
         if (!uid && typeof GM_cookie !== 'undefined' && GM_cookie.list) {
-            uid = await new Promise((resolve) => {
-                try {
-                    GM_cookie.list({ url: API_HOST, name: 'userid' }, (cookies, error) => {
-                        resolve(error || !cookies || !cookies.length ? null : (Number(cookies[0].value) || null));
+            const urls = [location.origin, 'https://lms.dgut.edu.cn', 'https://application.dgut.edu.cn', 'https://ua.dgut.edu.cn', 'https://www.ulearning.cn'];
+            const names = ['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'];
+            outer:
+            for (const url of urls) {
+                for (const name of names) {
+                    const v = await new Promise((resolve) => {
+                        try {
+                            GM_cookie.list({ url, name }, (cookies, error) => {
+                                if (error || !cookies || !cookies.length) return resolve(null);
+                                const n = Number(cookies[0].value);
+                                resolve(Number.isFinite(n) && n > 0 ? n : null);
+                            });
+                        } catch (e) { resolve(null); }
                     });
-                } catch (e) { resolve(null); }
-            });
+                    if (v) { uid = v; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium'; break outer; }
+                }
+            }
         }
-        if (!uid) uid = GM_getValue(SIGN_USERID_KEY, null);
+
+        // 4. localStorage
+        if (!uid) {
+            try {
+                const keys = ['userid','userId','USERID','uid','user','userInfo','USER_INFO','loginUser'];
+                for (const k of keys) {
+                    const raw = localStorage.getItem(k);
+                    if (!raw) continue;
+                    let v = raw;
+                    try { const o = JSON.parse(raw); v = o && (o.userid || o.userId || o.id || o.uid || o.studentid); } catch (e) {}
+                    const n = Number(v);
+                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'localStorage'; gSignUserIdConfidence = 'medium'; break; }
+                }
+            } catch (e) {}
+        }
+
+        // 5. 页面全局变量
+        if (!uid) {
+            try {
+                const cands = [
+                    PAGE_WIN.userInfo, PAGE_WIN.currentUser, PAGE_WIN.user,
+                    PAGE_WIN.gUserInfo, PAGE_WIN.studentUser,
+                    PAGE_WIN.koLearnCourseViewModel && (typeof PAGE_WIN.koLearnCourseViewModel.user === 'function'
+                        ? PAGE_WIN.koLearnCourseViewModel.user() : PAGE_WIN.koLearnCourseViewModel.user),
+                    PAGE_WIN.__INITIAL_STATE__ && PAGE_WIN.__INITIAL_STATE__.user
+                ];
+                for (const c of cands) {
+                    if (!c) continue;
+                    const v = c.userid || c.userId || c.id || c.uid || c.studentid;
+                    const n = Number(v);
+                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = '页面全局变量'; gSignUserIdConfidence = 'medium'; break; }
+                }
+            } catch (e) {}
+        }
+
+        // 6. 课程成员列表（低置信度兜底）
+        if (!uid) {
+            try {
+                const cid = (gSignCourses && gSignCourses[0] && gSignCourses[0].id)
+                          || new URL(location.href).searchParams.get('courseId')
+                          || GM_getValue(SIGN_CONFIG_KEY, {}).selectedCourseId;
+                if (cid) {
+                    const res = await gmFetchEx(`${SIGN_LMS_BASE}/classes?ocId=${cid}&pn=1&ps=9999&userId=&keyword=&lang=zh`);
+                    const list = (res && (res.list || (res.result && res.result.list))) || [];
+                    for (const m of list) {
+                        const n = Number(m.userId || m.userid);
+                        if (Number.isFinite(n) && n > 0) {
+                            uid = n; gSignUserIdSource = '成员列表(兜底)'; gSignUserIdConfidence = 'low'; break;
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // 7. 缓存
+        if (!uid) {
+            const cached = GM_getValue(SIGN_USERID_KEY, null);
+            const n = Number(cached);
+            if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = '缓存'; gSignUserIdConfidence = 'medium'; }
+        }
+
         if (uid) { gSignUserId = uid; GM_setValue(SIGN_USERID_KEY, uid); }
         return gSignUserId;
+    }
+
+    function signUserIdBadge() {
+        if (!gSignUserId) return '';
+        const conf = gSignUserIdConfidence || 'medium';
+        const cls = conf === 'high' ? 'dgut-conf-high' : conf === 'medium' ? 'dgut-conf-mid' : 'dgut-conf-low';
+        const label = conf === 'high' ? '高' : conf === 'medium' ? '中' : '低';
+        return `<span class="dgut-conf ${cls}" title="来源：${escapeHtml(gSignUserIdSource || '未知')}">userid ${gSignUserId} · 置信度${label}</span>`;
     }
 
     async function signLoadCourses(verbose = true) {
@@ -933,7 +988,7 @@
         if (![1, 2, 3].includes(scoreType)) return { skip: true, kind, message: '当前类型不支持自动处理，已跳过' };
         const cfg = getSignConfig();
         const uid = await signResolveUserId();
-        if (!uid) return { ok: false, kind, message: '未获取到用户ID（userid），无法签到' };
+        if (!uid) return { ok: false, kind, message: errFull(ERR.SIGN_NO_USERID) };
         const payload = { attendanceID: attendanceId, classID: classroomId, userID: uid, location: `${cfg.lat},${cfg.lng}`, address: cfg.address, enterWay: 1, attendanceCode: code };
         let status, message;
         try {
@@ -1001,11 +1056,17 @@
     function startSignMonitor() {
         const cfg = getSignConfig();
         const course = gSignCourses.find(c => String(c.id) === String(cfg.selectedCourseId));
-        if (!course) { showStatus('请先选择一门课程', true); return; }
+        if (!course) { showStatus(errFull(ERR.SIGN_NO_COURSE), true); return; }
+        if (gSignUserIdConfidence === 'low') {
+            showToastCard('⚠ userid 置信度低', '当前 userid 来自成员列表兜底，可能与登录用户不符。请在签到设置中手动填写 userid 后再启动。', '', 12000);
+            showStatus(errFull(ERR.SIGN_USERID_LOWCONF), true);
+            return;
+        }
         stopSignMonitor(true);
         gSignMonitor = { timer: null, checked: new Set(), running: true, course, busy: false };
         const interval = Math.max(2, Number(cfg.pollInterval) || 5);
         signLog(`开始监测《${course.name}》，每 ${interval} 秒检查一次。`, 'success');
+        signLog(`当前 userid: ${gSignUserId}（来源：${gSignUserIdSource}，置信度：${gSignUserIdConfidence}）`, 'muted');
         signLog('提示：数字码/一键签到可直接完成；二维码签到仅当活动数据自带签到码时才处理。', 'muted');
         const run = async () => {
             if (!gSignMonitor || !gSignMonitor.running || gSignMonitor.busy) return;
@@ -1070,6 +1131,7 @@
     }
     function renderSignView(ac) {
         const cfg = getSignConfig();
+        const manualUid = GM_getValue(MANUAL_USERID_KEY, 0) || '';
         ac.innerHTML = actionHeader(ACTION_TITLES.sign, '轮询当日课堂活动并自动签到') + `
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
@@ -1077,6 +1139,17 @@
                     <button id="dgut-sign-load" class="dgut-btn dgut-btn-primary" style="flex:none;">${icons.refresh} 读取课程</button>
                 </div>
                 <div id="dgut-sign-courses" class="dgut-list-box"></div>
+            </div>
+            <div class="dgut-card">
+                <div class="dgut-section-title">身份校验 <span style="font-weight:400;color:var(--dgut-on-surface-variant);font-size:11px;">（签到核心，请确认无误）</span></div>
+                <div id="dgut-sign-uid-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:8px;line-height:1.7;"></div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">手动 userid
+                        <input type="number" id="dgut-sign-uid" class="dgut-input" placeholder="留空=自动解析" min="0" value="${manualUid}" style="width:130px;padding:4px 6px;">
+                    </label>
+                    <button id="dgut-sign-uid-save" class="dgut-btn">保存</button>
+                    <button id="dgut-sign-uid-clear" class="dgut-btn">清除覆盖</button>
+                </div>
             </div>
             <div class="dgut-card">
                 <div class="dgut-section-title">监测设置</div>
@@ -1102,12 +1175,41 @@
                 <div id="dgut-sign-log" class="dgut-log"></div>
             </div>
             <div class="dgut-hint">
-                <b>关于二维码签到</b>：本脚本不会识别教室现场展示的二维码图片。数字码签到、一键签到可直接完成；二维码签到仅当活动数据本身已包含签到码时才会自动处理，否则会明确跳过并记录原因。
+                <b>关于 userid 置信度</b>：脚本优先从 JWT / 手动覆盖获取（高），其次 cookie / localStorage / 全局变量（中），最后从课程成员列表兜底（低）。<br>
+                <b>低置信度时禁止自动签到</b>，请手动填入 userid 后再启动。<br>
+                <b>关于二维码签到</b>：本脚本不会识别教室现场展示的二维码图片。数字码签到、一键签到可直接完成；二维码签到仅当活动数据本身已包含签到码时才会自动处理。
             </div>`;
         const box = ac.querySelector('#dgut-sign-courses');
+        const infoEl = ac.querySelector('#dgut-sign-uid-info');
+        const refreshUidInfo = () => {
+            const uid = gSignUserId;
+            if (!uid) {
+                infoEl.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">尚未解析 userid。</span> ${signUserIdBadge()}`;
+                return;
+            }
+            infoEl.innerHTML = `当前 userid：<b>${uid}</b> · 来源：<b>${escapeHtml(gSignUserIdSource || '未知')}</b> · ${signUserIdBadge()}`;
+            if (gSignUserIdConfidence === 'low') {
+                infoEl.innerHTML += `<br><span style="color:var(--dgut-error);">⚠ 低置信度：可能取到老师/其他学生，请手动覆盖。</span>`;
+            }
+        };
+        refreshUidInfo();
         renderSignCourseList(box);
         ac.querySelector('#dgut-sign-search').addEventListener('input', () => renderSignCourseList(box));
-        ac.querySelector('#dgut-sign-load').onclick = async () => { await signLoadCourses(true); renderSignCourseList(box); };
+        ac.querySelector('#dgut-sign-load').onclick = async () => { await signLoadCourses(true); renderSignCourseList(box); refreshUidInfo(); };
+        ac.querySelector('#dgut-sign-uid-save').onclick = () => {
+            const v = Number(ac.querySelector('#dgut-sign-uid').value);
+            if (Number.isFinite(v) && v > 0) {
+                GM_setValue(MANUAL_USERID_KEY, v);
+                gSignUserId = null; gSignUserIdSource = null; gSignUserIdConfidence = null;
+                signResolveUserId().then(() => { refreshUidInfo(); showStatus('已保存手动 userid：' + v); });
+            } else showStatus('请输入有效的 userid', true);
+        };
+        ac.querySelector('#dgut-sign-uid-clear').onclick = () => {
+            GM_setValue(MANUAL_USERID_KEY, 0);
+            gSignUserId = null; gSignUserIdSource = null; gSignUserIdConfidence = null;
+            ac.querySelector('#dgut-sign-uid').value = '';
+            signResolveUserId().then(() => { refreshUidInfo(); showStatus('已清除手动 userid'); });
+        };
         const readSettings = () => ({
             pollInterval: Math.max(2, Number(ac.querySelector('#dgut-sign-interval').value) || 5),
             lat: Number(ac.querySelector('#dgut-sign-lat').value) || DEFAULT_SIGN_CONFIG.lat,
@@ -1116,7 +1218,13 @@
             saveLog: ac.querySelector('#dgut-sign-savelog').checked
         });
         ac.querySelector('#dgut-sign-save').onclick = () => { saveSignConfig(readSettings()); showStatus('签到设置已保存'); };
-        ac.querySelector('#dgut-sign-start').onclick = () => { saveSignConfig(readSettings()); if (!gSignCourses.length) signLoadCourses(true).then(() => startSignMonitor()); else startSignMonitor(); };
+        ac.querySelector('#dgut-sign-start').onclick = async () => {
+            saveSignConfig(readSettings());
+            if (gSignUserIdConfidence === 'low' || !gSignUserId) await signResolveUserId();
+            refreshUidInfo();
+            if (!gSignCourses.length) signLoadCourses(true).then(() => startSignMonitor());
+            else startSignMonitor();
+        };
         ac.querySelector('#dgut-sign-stop').onclick = () => stopSignMonitor();
         ac.querySelector('#dgut-sign-export').onclick = exportSignLog;
         renderSignViewStatus();
@@ -1131,16 +1239,15 @@
             });
         }
         if (gSignCourses.length) renderSignCourseList(box);
-        else signLoadCourses(false).then(() => renderSignCourseList(box));
+        else signLoadCourses(false).then(() => { renderSignCourseList(box); refreshUidInfo(); });
     }
 
-    const DEFAULT_COURSE_HELPER = {
-        enabled: false, rate: 6,
-        autoAnswer: true, autoNext: true, collectBank: true
-    };
+    /* ============================================================
+     * 刷课助手
+     * ============================================================ */
+    const DEFAULT_COURSE_HELPER = { enabled: false, rate: 6, autoAnswer: true, autoNext: true, collectBank: true };
     let gCourseHelper = null;
     const pgSleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const PG_TYPE_MAP = { 1: '单选题', 2: '多选题', 3: '填空题', 4: '判断题', 5: '简答题', 11: '完形填空', 12: '排序题', 17: '选词填空', 23: '下拉选择题', 24: '综合题' };
 
     function isCoursePage() { return /learnCourse/i.test(location.pathname) || /learnCourse/i.test(location.href); }
     function getCourseHelperConfig() { return Object.assign({}, DEFAULT_COURSE_HELPER, GM_getValue(COURSE_HELPER_KEY, {}) || {}); }
@@ -1164,9 +1271,13 @@
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET', url, timeout: 15000,
-                onload: (res) => { try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(new Error('JSON 解析失败')); } },
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('请求超时'))
+                onload: (res) => {
+                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
+                    try { resolve(JSON.parse(res.responseText)); }
+                    catch (e) { reject(new Error(errFull(ERR.SIGN_PARSE_FAIL))); }
+                },
+                onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
+                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
             });
         });
     }
@@ -1182,12 +1293,7 @@
             } catch (e) { this.nativeDescriptor = null; }
         },
         refresh() { this.target = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); },
-        start() {
-            this.init(); this.active = true; this.resetHistory = [];
-            this.hookAll();
-            if (this.timer) clearTimeout(this.timer);
-            this.scheduleNext();
-        },
+        start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
         stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } },
         get(v) { return this.nativeDescriptor && this.nativeDescriptor.get ? this.nativeDescriptor.get.call(v) : v.playbackRate; },
         set(v, r) { if (this.nativeDescriptor && this.nativeDescriptor.set) this.nativeDescriptor.set.call(v, r); else v.playbackRate = r; },
@@ -1223,8 +1329,7 @@
         scheduleNext() { if (!this.active) return; this.timer = setTimeout(() => { this.enforce(); this.scheduleNext(); }, this.learnedInterval); },
         enforce() {
             if (!this.active) return;
-            this.refresh();
-            this.hookAll();
+            this.refresh(); this.hookAll();
             document.querySelectorAll('video').forEach((v, i) => {
                 if (Math.abs(this.get(v) - this.target) > 0.01) {
                     this.set(v, this.target);
@@ -1264,7 +1369,6 @@
         } catch (e) {}
         return null;
     }
-
     function pgVmAnswer(node) {
         const q = pgGetQuestionModel(node);
         if (!q || typeof q.correctAnswer !== 'function') return null;
@@ -1406,18 +1510,12 @@
     function pgHasMediaContainer() {
         return document.querySelectorAll('.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech, .mejs__container').length > 0;
     }
-    function pgNodeVisible(el) {
-        if (!el) return false;
-        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-    }
 
     function pgVideoFinished(v) {
         if (!v) return false;
         const dur = Number(v.duration);
         const rs = (typeof v.readyState === 'number') ? v.readyState : 2;
-        if (Number.isFinite(dur) && dur > 0 && rs >= 2 && !v.seeking) {
-            if (v.ended || v.currentTime >= dur - 0.3) return true;
-        }
+        if (Number.isFinite(dur) && dur > 0 && rs >= 2 && !v.seeking) { if (v.ended || v.currentTime >= dur - 0.3) return true; }
         try {
             let node = v.parentElement, depth = 0;
             while (node && depth < 8) {
@@ -1437,7 +1535,6 @@
         } catch (e) {}
         return false;
     }
-
     function pgTouchPageDwell() {
         const pid = pgPageId();
         if (pid !== gPgLastPageId) { gPgLastPageId = pid; gPgPageChangeAt = Date.now(); }
@@ -1456,7 +1553,6 @@
         gPgAdvancePageId = pid;
         return true;
     }
-
     function pgDismissModal() {
         const modal = document.querySelector('.modal.fade.in');
         if (!modal || !pgVisible(modal)) return false;
@@ -1488,27 +1584,18 @@
             gPgQuestionUntil = Date.now() + 1500;
             await pgSleep(900);
             pgClickNext();
-        } finally {
-            gPgAnswering = false;
-        }
-    }
-
-    function pgLogicSafe() {
-        try { pgLogic(); }
-        catch (e) { log('[刷课] pgLogic 异常（本轮跳过）:', e && e.message ? e.message : e); }
+        } finally { gPgAnswering = false; }
     }
 
     function pgLogic() {
         if (!gCourseHelper || !gCourseHelper.running) return;
         if (pgDismissModal()) return;
         pgTouchPageDwell();
-
         if (document.querySelector('.question-setting-panel')) {
             if (Date.now() < gPgQuestionUntil) return;
             pgAnswerAll();
             return;
         }
-
         const videos = Array.from(document.querySelectorAll('video'));
         if (videos.length) {
             gPgMediaWaitSince = 0;
@@ -1535,14 +1622,12 @@
             else chUpdateStatus();
             return;
         }
-
         if (pgHasMediaContainer()) {
             if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
             chUpdateStatus();
             if (Date.now() - gPgMediaWaitSince < 10000) return;
         }
         gPgMediaWaitSince = 0;
-
         pgClickNext();
     }
 
@@ -1562,7 +1647,13 @@
     function startCourseHelper() {
         if (gCourseHelper && gCourseHelper.running) { showStatus('刷课助手已在运行'); return; }
         const cfg = getCourseHelperConfig();
-        if (!isCoursePage()) showStatus('当前不在课件页（需 ua.dgut.edu.cn/learnCourse），仍会尝试运行', true);
+        if (!isCoursePage()) { showStatus(errFull(ERR.COURSE_NO_PAGE), true); return; }
+
+        const ifr = detectIframe();
+        if (!ifr.hasVideo && !ifr.hasVM && document.querySelectorAll('.question-element-node').length === 0) {
+            showToastCard('⚠ 未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
+        }
+
         gCourseHelper = { running: true, timer: null, uiTimer: null };
         youxueyuan.start();
         chLog(`刷课助手启动：倍速 ${cfg.rate}×`, 'success');
@@ -1586,9 +1677,11 @@
     function renderCourseView(ac) {
         const cfg = getCourseHelperConfig();
         const onPage = isCoursePage();
+        const ifr = detectIframe();
         ac.innerHTML = actionHeader(ACTION_TITLES.course, '课件视频倍速、自动答题、自动翻页与题库') + `
             <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
                 ${onPage ? '✓ 当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
+                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">⚠ 当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
             </div>
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
@@ -1630,7 +1723,7 @@
                 const v = Math.min(16, Math.max(1, Number(rateEl.value) || 6));
                 saveCourseHelperConfig({ rate: v });
                 const running = !!(gCourseHelper && gCourseHelper.running);
-                if (running) { try { rateGuard.refreshTarget(); rateGuard.enforce(); } catch (e) {} }
+                if (running) { try { pgRateGuard.refresh(); pgRateGuard.enforce(); } catch (e) {} }
                 chLog('倍速已更新为 ' + v + 'x' + (running ? '(运行中即时生效)' : ''), 'success');
                 showStatus('倍速已更新为 ' + v + 'x');
                 chUpdateStatus();
@@ -1732,7 +1825,7 @@
             } catch (e) { debugLog("RateGuard", "setter 重写失败", e.message); }
             v.addEventListener('ratechange', () => { if (!this.active) return; const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.recordReset(Date.now(), cur); this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } });
         },
-        recordReset(timestamp, fromVal) {
+        recordReset(timestamp) {
             this.resetHistory.push(timestamp); if (this.resetHistory.length > 20) this.resetHistory.shift();
             if (this.resetHistory.length >= 3) {
                 const intervals = []; for (let i = 1; i < this.resetHistory.length; i++) intervals.push(this.resetHistory[i] - this.resetHistory[i - 1]);
@@ -1762,7 +1855,7 @@
             try { if ($) { const $allVideos = $("video"); for (let i = 0; i < $allVideos.length; i++) $allVideos.get(i).pause(); } } catch (e) {}
         },
         logic() {
-            if (!$) return;
+            if (!$) { debugLog("Youxueyuan", errFull(ERR.COURSE_NO_JQ), null); return; }
             if ($('.modal.fade.in').length > 0) {
                 switch ($('.modal.fade.in').attr('id')) {
                     case 'statModal': $("#statModal .btn-hollow").eq(-1).click(); break;
@@ -1837,6 +1930,16 @@
         },
     };
 
+    const ANSWER_CACHE = new Map();
+    const ANSWER_CACHE_TTL = 5 * 60 * 1000;
+    function answerCacheGet(qid) {
+        const e = ANSWER_CACHE.get(String(qid));
+        if (!e) return null;
+        if (Date.now() - e.t > ANSWER_CACHE_TTL) { ANSWER_CACHE.delete(String(qid)); return null; }
+        return e.v;
+    }
+    function answerCacheSet(qid, v) { if (!qid || !v) return; ANSWER_CACHE.set(String(qid), { v, t: Date.now() }); }
+
     const respondent = {
         parentId: null, questionId: null, $questionNode: null, questionModel: null, answerDataCache: null,
         _answer(parentId, $questionNode, callback) {
@@ -1856,13 +1959,12 @@
             let waitMs = 120;
             switch (resolvedType) {
                 case '多选题': waitMs = this._answerMultiSelect(); break;
-                case 'Multiple Choice': case '单选题': waitMs = this._answerSelect(); break;
-                case 'True/False': case '判断题': waitMs = this._answerJudge(); break;
-                case 'Fill in the Blank': case '填空题': waitMs = this._answerInput(); break;
-                case 'Short Answer': case '简答题': waitMs = this._answerSimpleQuestion(); break;
-                case 'Word Bank': case '选词填空': waitMs = this._answerChoicesQuestion(); break;
-                case 'Sequence': case '排序题': waitMs = this._answerRankQuestion(); break;
-                case '综合题': console.error("Unsupported question type: 综合题"); break;
+                case '单选题': waitMs = this._answerSelect(); break;
+                case '判断题': waitMs = this._answerJudge(); break;
+                case '填空题': waitMs = this._answerInput(); break;
+                case '简答题': waitMs = this._answerSimpleQuestion(); break;
+                case '选词填空': waitMs = this._answerChoicesQuestion(); break;
+                case '排序题': waitMs = this._answerRankQuestion(); break;
             }
             if (callback && typeof callback == 'function') callback();
             return waitMs;
@@ -1984,18 +2086,23 @@
             return data;
         },
         _syncGetAnswer() {
-            let res_answer;
-            try {
-                let apiHost = (typeof CONFIG_API_HOST !== "undefined" && CONFIG_API_HOST) ? CONFIG_API_HOST : "https://api.ulearning.cn";
-                if (window.location.hostname.includes("dgut.edu.cn")) apiHost = "https://ua.dgut.edu.cn";
-                let reqUrl = apiHost + '/uaapi/questionAnswer/' + this.questionId;
-                if (!$) return res_answer;
-                $.ajax({ url: reqUrl, type: "GET", async: false, data: { parentId: this.parentId }, success: function (xhr) { res_answer = xhr; }, error: function () { debugLog("RespondentSyncError", "同步答案接口请求失败", { questionId: this.questionId }); }.bind(this) });
-            } catch (e) { debugLog("RespondentSyncError", "同步答案接口异常", e.message); }
-            return res_answer;
+            const cached = answerCacheGet(this.questionId);
+            if (cached) return cached;
+            const apiHost = window.location.hostname.includes("dgut.edu.cn") ? "https://ua.dgut.edu.cn" : "https://api.ulearning.cn";
+            const reqUrl = apiHost + '/uaapi/questionAnswer/' + this.questionId + '?parentId=' + (this.parentId || '');
+            GM_xmlhttpRequest({
+                method: 'GET', url: reqUrl, timeout: 8000,
+                onload: (res) => {
+                    try { const d = JSON.parse(res.responseText); if (d) answerCacheSet(this.questionId, d); } catch (e) {}
+                }
+            });
+            return null;
         }
     };
 
+    /* ============================================================
+     * 作业互评
+     * ============================================================ */
     function peerRecords() { return GM_getValue(PEER_KEY, []) || []; }
     function peerSaveRecords(newRecords) {
         const all = peerRecords();
@@ -2026,9 +2133,12 @@
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET', url, headers: token ? { AUTHORIZATION: token } : {}, timeout: 15000,
-                onload: (res) => { try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(new Error('JSON 解析失败')); } },
-                onerror: () => reject(new Error('网络错误')),
-                ontimeout: () => reject(new Error('请求超时'))
+                onload: (res) => {
+                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
+                    try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(new Error(errFull(ERR.PEER_PARSE_FAIL))); }
+                },
+                onerror: () => reject(new Error(errFull(ERR.PEER_NET_FAIL))),
+                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
             });
         });
     }
@@ -2097,7 +2207,7 @@
     }
     async function peerRunScan() {
         const p = peerParseParams();
-        if (!p) { showStatus('当前不是作业互评详情页（URL 需含 stuDetail/学号/作业ID）', true); return; }
+        if (!p) { showStatus(errFull(ERR.PEER_NOT_PAGE), true); return; }
         showStatus('正在读取互评数据…');
         const hwInfo = { hwName: '未知作业', startTime: Date.now(), endTime: Date.now() };
         try {
@@ -2133,7 +2243,15 @@
             await pgSleep(400);
             peerInjectLabels();
             if (gPeerObserver) gPeerObserver.disconnect();
-            gPeerObserver = new MutationObserver(() => { if (document.querySelector('.peermain:not([data-peerdone]), .peer_host:not([data-peerdone])')) peerInjectLabels(); });
+            let pending = false;
+            gPeerObserver = new MutationObserver(() => {
+                if (pending) return;
+                pending = true;
+                setTimeout(() => {
+                    pending = false;
+                    if (document.querySelector('.peermain:not([data-peerdone]), .peer_host:not([data-peerdone])')) peerInjectLabels();
+                }, 200);
+            });
             gPeerObserver.observe(document.body, { childList: true, subtree: true });
             setTimeout(() => { if (gPeerObserver) { gPeerObserver.disconnect(); gPeerObserver = null; } }, 30000);
             showStatus(`已读取：评价人 ${hwList.length}，待评价 ${peerList.length}`);
@@ -2171,6 +2289,9 @@
         ac.querySelector('#dgut-peer-clear').onclick = () => { if (confirm('确定清空所有互评记录？不可撤销。')) { GM_setValue(PEER_KEY, []); peerRenderList(); } };
     }
 
+    /* ============================================================
+     * 求是读书
+     * ============================================================ */
     const READ_MIN_SEC = 4 * 3600 + 10;
     const READ_NAV_SEC = 3;
     const READ_SAVE_INTERVAL = 30;
@@ -2188,7 +2309,6 @@
     function rdActiveSectionName() { const a = document.querySelector('.page-name.active'); const s = a && a.closest('.section-item'); const n = s && s.querySelector('.section-name .text'); return n ? rdTrim(n.textContent) : ''; }
     function rdBookKey() { const name = rdActiveSectionName(); const cid = rdCourseId(); return name ? (cid ? `${cid}|${name}` : name) : (cid || location.href); }
     function rdPageId(page) { if (!page) return null; return typeof page.id === 'function' ? page.id() : page.id; }
-    function rdIsComplete(page) { try { const rec = rdUnwrap(page.record); return rec ? !!rdUnwrap(rec.status) : false; } catch (e) { return false; } }
     function rdServerTimes() {
         const vm = rdVm(); if (!vm) return null;
         const course = rdUnwrap(vm.course); if (!course) return null;
@@ -2236,9 +2356,7 @@
     function rdSyncReader() {
         const cfg = rdCfg();
         const payload = { type: 'DGUT_SINGLE_FILE_READER_SYNC', intervalSec: cfg.readerSec, autoStart: cfg.autoStart };
-        let n = 0;
-        Array.from(document.querySelectorAll('iframe')).forEach(f => { try { if (f.contentWindow) { f.contentWindow.postMessage(payload, '*'); n++; } } catch (e) {} });
-        return n;
+        Array.from(document.querySelectorAll('iframe')).forEach(f => { try { if (f.contentWindow) f.contentWindow.postMessage(payload, '*'); } catch (e) {} });
     }
     function rdTick() {
         if (!gRead || !gRead.running) return;
@@ -2271,9 +2389,15 @@
     }
     function rdStart() {
         if (gRead && gRead.running) return;
+        const vm = rdVm();
+        if (!vm) {
+            showStatus(errFull(ERR.READ_NO_VM), true);
+            showToastCard('求是读书未启动', '未找到课件视图模型 koLearnCourseViewModel，可能不在课件页或运行在 iframe 中。', '', 8000);
+            return;
+        }
         const key = rdBookKey();
         gRead = { running: true, timer: null, bookKey: key, accumulated: rdBookTime(key), sessionStart: Date.now(), lastSave: rdBookTime(key), total: rdBookTime(key), curPageId: null, pageStart: Date.now() };
-        const vm = rdVm(); if (vm && vm.currentPage) gRead.curPageId = rdPageId(vm.currentPage());
+        if (vm.currentPage) gRead.curPageId = rdPageId(vm.currentPage());
         gRead.timer = setInterval(rdTick, 1000);
         rdSaveCfg({ readerAutoStart: true });
         rdSyncReader();
@@ -2291,10 +2415,13 @@
     }
     function renderReadView(ac) {
         const cfg = rdCfg();
-        const onPage = /\/learnCourse\//i.test(location.href) || (rdVm() && rdVm().currentPage);
+        const vm = rdVm();
+        const onPage = /\/learnCourse\//i.test(location.href) || (vm && vm.currentPage);
+        const hasVm = !!vm;
         ac.innerHTML = actionHeader(ACTION_TITLES.read, '课件阅读时长统计与自动翻页') + `
             <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
                 ${onPage ? '✓ 当前在课件页，可开始求是阅读。' : '请先在优学院打开求是读书课件页（地址含 <b>ua.dgut.edu.cn/learnCourse/learnCourse.html</b>）。'}
+                ${!hasVm ? '<br><span style="color:var(--dgut-error);">⚠ 未检测到 koLearnCourseViewModel，启动后会空转。</span>' : ''}
             </div>
             <div class="dgut-card">
                 <div style="text-align:center;font-size:30px;font-weight:700;color:var(--dgut-primary);font-family:Consolas,monospace;" id="dgut-rd-timer">${rdFmt(rdBookTime(rdBookKey()))}</div>
@@ -2321,6 +2448,9 @@
         };
     }
 
+    /* ============================================================
+     * 文档工具
+     * ============================================================ */
     function getDocDraft() { return GM_getValue(DOC_DRAFT_KEY, ''); }
     function saveDocDraft(t) { GM_setValue(DOC_DRAFT_KEY, String(t || '')); }
     function getDocTitle() { return GM_getValue(DOC_TITLE_KEY, `文档_${dateKey()}`); }
@@ -2329,12 +2459,13 @@
     function addSignature(sig) { const l = getSignatures(); l.push(sig); GM_setValue(DOC_SIGN_KEY, l.slice(-30)); }
     function deleteSignature(id) { GM_setValue(DOC_SIGN_KEY, getSignatures().filter(s => String(s.id) !== String(id))); }
 
-    function mdToHtml(md) {
-        if (typeof marked === 'undefined') throw new Error('marked 库未加载');
-        try { return marked.parse(String(md || '')); }
-        catch (e) { throw new Error('Markdown 渲染失败：' + e.message); }
+    async function mdToHtml(md) {
+        const lib = await ensureMarked();
+        if (!lib) throw new Error(errFull(ERR.DOC_NO_MARKED));
+        try { if (typeof lib.setOptions === 'function') lib.setOptions({ breaks: true, gfm: true }); } catch (e) {}
+        try { return lib.parse(String(md || '')); }
+        catch (e) { throw new Error(errFull(ERR.DOC_PARSE_MD, e.message)); }
     }
-
     function signaturesHtml(signatures) {
         if (!signatures || !signatures.length) return '';
         return signatures.map(s => `
@@ -2343,7 +2474,6 @@
                 <img src="${s.dataUrl}" style="width:180px;height:auto;vertical-align:bottom;">
             </div>`).join('');
     }
-
     function wrapForWord(html, title, signatures = []) {
         return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -2379,15 +2509,10 @@ ${signaturesHtml(signatures)}
 </html>`;
     }
 
-    /* ============================================================
-     * PDF 直出（html2canvas + jsPDF）
-     * ============================================================ */
-
     const PDF_MARGIN_MM = 14;
     const PDF_PAGE_W_MM = 210;
     const PDF_PAGE_H_MM = 297;
     const PDF_RENDER_W = 780;
-
     const PDF_INLINE_STYLE = `
         * { box-sizing: border-box; }
         h1 { font-size: 26px; border-bottom: 1px solid #CAC4D0; padding-bottom: 6px; margin: 18px 0 10px; }
@@ -2409,48 +2534,28 @@ ${signaturesHtml(signatures)}
         hr { border: none; border-top: 1px solid #CAC4D0; margin: 16px 0; }
         a { color: #6750A4; text-decoration: underline; }
     `;
+    // 每处理 N 页让出一次主线程，避免长时间卡死 UI
+    const PDF_YIELD_EVERY = 3;
+    const yieldToUI = () => new Promise(r => setTimeout(r, 0));
 
-    function pdfLibReady() {
-        const hasH2C = (typeof html2canvas !== 'undefined');
-        const hasJsPDF = !!(window.jspdf && window.jspdf.jsPDF) || !!window.jsPDF;
-        return { hasH2C, hasJsPDF };
-    }
-
-    /**
-     * 将一段 HTML 渲染为 PDF Blob（A4，可多页）
-     */
-    async function htmlToPdfBlob(innerHtml, title) {
-        const lib = pdfLibReady();
-        if (!lib.hasH2C) throw new Error('html2canvas 未加载（检查网络或脚本管理器 @require）');
-        if (!lib.hasJsPDF) throw new Error('jsPDF 未加载（检查网络或脚本管理器 @require）');
-        const PDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
-
+    async function htmlToPdfBlob(innerHtml, title, onProgress) {
+        const [h2c, PDFCtor] = await Promise.all([ensureHtml2Canvas(), ensureJsPDF()]);
+        if (!h2c) throw new Error(errFull(ERR.DOC_NO_H2C));
+        if (!PDFCtor) throw new Error(errFull(ERR.DOC_NO_JSPDF));
         const contentW = PDF_PAGE_W_MM - PDF_MARGIN_MM * 2;
         const contentH = PDF_PAGE_H_MM - PDF_MARGIN_MM * 2;
-
         const holder = document.createElement('div');
         holder.setAttribute('data-dgut-pdf-holder', '1');
         holder.style.cssText = [
-            'position:absolute',
-            'left:-100000px',
-            'top:0',
-            `width:${PDF_RENDER_W}px`,
-            'margin:0',
-            'padding:0',
-            'background:#ffffff',
-            'color:#1D1B20',
+            'position:absolute', 'left:-100000px', 'top:0', `width:${PDF_RENDER_W}px`,
+            'margin:0', 'padding:0', 'background:#ffffff', 'color:#1D1B20',
             'font-family:"PingFang SC","Microsoft YaHei",SimSun,sans-serif',
-            'font-size:16px',
-            'line-height:1.7',
-            'box-sizing:border-box',
-            'pointer-events:none'
+            'font-size:16px', 'line-height:1.7', 'box-sizing:border-box', 'pointer-events:none'
         ].join(';');
         holder.innerHTML = `<style>${PDF_INLINE_STYLE}</style>${innerHtml}`;
         document.body.appendChild(holder);
-
         try {
             try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
-            // 等图片解码
             const imgs = Array.from(holder.querySelectorAll('img'));
             await Promise.all(imgs.map(im => (im.complete ? Promise.resolve() : new Promise(r => {
                 im.addEventListener('load', r, { once: true });
@@ -2458,55 +2563,39 @@ ${signaturesHtml(signatures)}
                 setTimeout(r, 2000);
             }))));
             await new Promise(r => setTimeout(r, 80));
-
-            const canvas = await html2canvas(holder, {
-                scale: 2,
-                backgroundColor: '#ffffff',
-                useCORS: true,
-                allowTaint: false,
-                logging: false,
-                width: holder.scrollWidth,
-                height: holder.scrollHeight,
-                windowWidth: PDF_RENDER_W,
-                windowHeight: Math.max(holder.scrollHeight, 800)
+            const canvas = await h2c(holder, {
+                scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
+                width: holder.scrollWidth, height: holder.scrollHeight,
+                windowWidth: PDF_RENDER_W, windowHeight: Math.max(holder.scrollHeight, 800)
             });
-
             const pxPerMm = canvas.width / contentW;
             const pageSlicePx = Math.max(1, Math.floor(contentH * pxPerMm));
-
+            const totalPages = Math.ceil(canvas.height / pageSlicePx);
             const pdf = new PDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
             try { pdf.setProperties({ title: title || 'document', creator: 'DGUT Helper' }); } catch (e) {}
-
             let y = 0, pageIdx = 0;
             while (y < canvas.height) {
                 const sliceH = Math.min(pageSlicePx, canvas.height - y);
                 if (sliceH <= 0) break;
-
                 const slice = document.createElement('canvas');
-                slice.width = canvas.width;
-                slice.height = sliceH;
+                slice.width = canvas.width; slice.height = sliceH;
                 const sctx = slice.getContext('2d');
-                sctx.fillStyle = '#ffffff';
-                sctx.fillRect(0, 0, slice.width, slice.height);
+                sctx.fillStyle = '#ffffff'; sctx.fillRect(0, 0, slice.width, slice.height);
                 sctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-
                 const dataUrl = slice.toDataURL('image/jpeg', 0.94);
                 if (pageIdx > 0) pdf.addPage();
                 pdf.addImage(dataUrl, 'JPEG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentW, sliceH / pxPerMm);
-
-                y += sliceH;
-                pageIdx++;
-                if (pageIdx > 500) break; // 安全阀
+                y += sliceH; pageIdx++;
+                if (pageIdx > 500) break;
+                if (onProgress) { try { onProgress(pageIdx, totalPages); } catch (e) {} }
+                if (pageIdx % PDF_YIELD_EVERY === 0) await yieldToUI();
             }
-
             return pdf.output('blob');
         } finally {
             holder.remove();
         }
     }
-
-    // 统一打印窗口：优先用 Blob URL 打开新标签，避免样式丢失 / 弹窗失效
-    function openPrintWindow(html, title) {
+    function openPrintWindow(html) {
         let win = null;
         try {
             const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
@@ -2515,11 +2604,7 @@ ${signaturesHtml(signatures)}
             if (win) {
                 setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
                 const doPrint = () => { try { win.focus(); win.print(); } catch (e) {} };
-                try {
-                    win.addEventListener('load', () => setTimeout(doPrint, 400), { once: true });
-                } catch (e) {
-                    setTimeout(doPrint, 900);
-                }
+                try { win.addEventListener('load', () => setTimeout(doPrint, 400), { once: true }); } catch (e) { setTimeout(doPrint, 900); }
                 setTimeout(doPrint, 1400);
                 return win;
             }
@@ -2527,24 +2612,19 @@ ${signaturesHtml(signatures)}
         try {
             win = window.open('', '_blank');
             if (!win) return null;
-            win.document.open();
-            win.document.write(html);
-            win.document.close();
+            win.document.open(); win.document.write(html); win.document.close();
             setTimeout(() => { try { win.focus(); win.print(); } catch (e) {} }, 700);
             return win;
-        } catch (e) {
-            return null;
-        }
+        } catch (e) { return null; }
     }
-
-    function exportMdToWord() {
+    async function exportMdToWord() {
         const md = document.getElementById('dgut-doc-md')?.value || '';
-        if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
+        if (!md.trim()) { showStatus(errFull(ERR.DOC_EMPTY_MD), true); return; }
         const title = (document.getElementById('dgut-doc-title')?.value || getDocTitle()).trim() || `文档_${dateKey()}`;
         saveDocDraft(md); saveDocTitle(title);
         const sigs = getPickedSignatures();
         let html;
-        try { html = mdToHtml(md); }
+        try { html = await mdToHtml(md); }
         catch (e) { showStatus(e.message, true); return; }
         const fullHtml = wrapForWord(html, title, sigs);
         const blob = new Blob(['\uFEFF', fullHtml], { type: 'application/msword;charset=utf-8' });
@@ -2555,24 +2635,23 @@ ${signaturesHtml(signatures)}
         setTimeout(() => URL.revokeObjectURL(a.href), 5000);
         showStatus(`已导出 Word：${title}.doc（含 ${sigs.length} 个签名）`);
     }
-
     async function exportMdToPdf(btn) {
         const md = document.getElementById('dgut-doc-md')?.value || '';
-        if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
+        if (!md.trim()) { showStatus(errFull(ERR.DOC_EMPTY_MD), true); return; }
         const title = (document.getElementById('dgut-doc-title')?.value || getDocTitle()).trim() || `文档_${dateKey()}`;
         saveDocDraft(md); saveDocTitle(title);
         const sigs = getPickedSignatures();
-
         let html;
-        try { html = mdToHtml(md); }
+        try { html = await mdToHtml(md); }
         catch (e) { showStatus(e.message, true); return; }
-
         const inner = html + signaturesHtml(sigs);
         const oldText = btn ? btn.textContent : '';
         if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
         startStatusTicker('正在生成 PDF');
         try {
-            const blob = await htmlToPdfBlob(inner, title);
+            const blob = await htmlToPdfBlob(inner, title, (cur, tot) => {
+                if (btn) btn.textContent = `生成中 ${cur}/${tot}`;
+            });
             stopStatusTicker();
             imgDownloadBlob(blob, `${title}.pdf`);
             showStatus(`已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）`);
@@ -2583,22 +2662,20 @@ ${signaturesHtml(signatures)}
             if (btn) { btn.disabled = false; btn.textContent = oldText; }
         }
     }
-
-    function exportMdToPrintView() {
+    async function exportMdToPrintView() {
         const md = document.getElementById('dgut-doc-md')?.value || '';
-        if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
+        if (!md.trim()) { showStatus(errFull(ERR.DOC_EMPTY_MD), true); return; }
         const title = (document.getElementById('dgut-doc-title')?.value || getDocTitle()).trim() || `文档_${dateKey()}`;
         saveDocDraft(md); saveDocTitle(title);
         const sigs = getPickedSignatures();
         let html;
-        try { html = mdToHtml(md); }
+        try { html = await mdToHtml(md); }
         catch (e) { showStatus(e.message, true); return; }
         const fullHtml = wrapForWord(html, title, sigs);
-        const win = openPrintWindow(fullHtml, title);
+        const win = openPrintWindow(fullHtml);
         if (!win) { showStatus('弹窗被拦截：请允许本站弹窗后重试', true); return; }
         showStatus('已打开打印视图：可在打印对话框中选择"另存为 PDF"');
     }
-
     function createSignaturePad(canvas) {
         const ctx = canvas.getContext('2d');
         const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -2662,14 +2739,12 @@ ${signaturesHtml(signatures)}
             resize
         };
     }
-
     function getPickedSignatures() {
         const picked = Array.from(document.querySelectorAll('.dgut-sig-pick:checked')).map(c => c.dataset.id);
         if (!picked.length) return [];
         const all = getSignatures();
         return all.filter(s => picked.includes(String(s.id)));
     }
-
     function renderSignatureList() {
         const el = document.getElementById('dgut-sig-list');
         if (!el) return;
@@ -2694,7 +2769,6 @@ ${signaturesHtml(signatures)}
             renderSignatureList();
         });
     }
-
     function renderDocToolView(ac) {
         const draft = getDocDraft();
         const title = getDocTitle();
@@ -2736,24 +2810,19 @@ ${signaturesHtml(signatures)}
         const pad = createSignaturePad(ac.querySelector('#dgut-sig-canvas'));
         mdEl.addEventListener('input', () => saveDocDraft(mdEl.value));
         titleEl.addEventListener('input', () => saveDocTitle(titleEl.value));
-        ac.querySelector('#dgut-doc-preview').onclick = () => {
+        ac.querySelector('#dgut-doc-preview').onclick = async () => {
             const md = mdEl.value;
-            if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
-            try {
-                const html = mdToHtml(md);
-                previewBox.style.display = 'block';
-                previewBox.innerHTML = html;
-            } catch (e) { showStatus(e.message, true); }
+            if (!md.trim()) { showStatus(errFull(ERR.DOC_EMPTY_MD), true); return; }
+            try { const html = await mdToHtml(md); previewBox.style.display = 'block'; previewBox.innerHTML = html; }
+            catch (e) { showStatus(e.message, true); }
         };
         ac.querySelector('#dgut-doc-word').onclick = exportMdToWord;
         ac.querySelector('#dgut-doc-pdf').onclick = (e) => exportMdToPdf(e.currentTarget);
         ac.querySelector('#dgut-doc-print').onclick = exportMdToPrintView;
         ac.querySelector('#dgut-doc-clear').onclick = () => {
             if (!confirm('清空 Markdown 内容？此操作不可撤销。')) return;
-            mdEl.value = '';
-            saveDocDraft('');
-            previewBox.style.display = 'none';
-            previewBox.innerHTML = '';
+            mdEl.value = ''; saveDocDraft('');
+            previewBox.style.display = 'none'; previewBox.innerHTML = '';
         };
         ac.querySelector('#dgut-sig-clear').onclick = () => pad.clear();
         ac.querySelector('#dgut-sig-save').onclick = () => {
@@ -2768,25 +2837,9 @@ ${signaturesHtml(signatures)}
         renderSignatureList();
     }
 
-    let gWpMammothPromise = null;
-    function wpLoadMammoth() {
-        if (typeof mammoth !== 'undefined') return Promise.resolve(mammoth);
-        if (typeof window.mammoth !== 'undefined') return Promise.resolve(window.mammoth);
-        if (gWpMammothPromise) return gWpMammothPromise;
-        gWpMammothPromise = new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js';
-            s.async = true;
-            s.onload = () => {
-                if (typeof window.mammoth !== 'undefined') resolve(window.mammoth);
-                else { gWpMammothPromise = null; reject(new Error('mammoth 加载后仍未就绪')); }
-            };
-            s.onerror = () => { gWpMammothPromise = null; reject(new Error('无法加载 mammoth（网络或 CSP 限制）')); };
-            (document.head || document.documentElement).appendChild(s);
-        });
-        return gWpMammothPromise;
-    }
-
+    /* ============================================================
+     * Word 转 PDF
+     * ============================================================ */
     function wpBuildPrintHtml(innerHtml, title) {
         return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -2795,9 +2848,6 @@ ${signaturesHtml(signatures)}
 <head>
 <meta charset="utf-8">
 <title>${escapeHtml(title)}</title>
-<!--[if gte mso 9]>
-<xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml>
-<![endif]-->
 <style>
     @page { size: A4; margin: 2cm; }
     html, body { margin: 0; padding: 0; }
@@ -2820,9 +2870,9 @@ ${signaturesHtml(signatures)}
 <body>${innerHtml}</body>
 </html>`;
     }
-
     async function wpParseDocxFile(file) {
-        const mammoth = await wpLoadMammoth();
+        const mammoth = await ensureMammoth();
+        if (!mammoth) throw new Error(errFull(ERR.WP_NO_MAMMOTH));
         const arrayBuffer = await file.arrayBuffer();
         const options = {
             styleMap: [
@@ -2841,7 +2891,6 @@ ${signaturesHtml(signatures)}
         const result = await mammoth.convertToHtml({ arrayBuffer }, options);
         return { html: result.value || '', messages: result.messages || [] };
     }
-
     function renderWordPdfView(ac) {
         ac.innerHTML = actionHeader(ACTION_TITLES.wordpdf, '本地解析 .docx → 直接下载 PDF / 打印视图 / 导出 .doc') + `
             <div class="dgut-hint">
@@ -2850,7 +2899,8 @@ ${signaturesHtml(signatures)}
                 2. 点「下载 PDF」→ 本地生成 A4 PDF 并直接保存，<b>无需打印对话框</b><br>
                 3. 或点「打印 PDF」→ 新窗口按 <b>Ctrl/Cmd + P</b>，目标选「另存为 PDF」<br>
                 4. 或点「导出为 .doc」下载 Word 可直接编辑的文件<br>
-                <span style="color:var(--dgut-warn);">仅支持 <code>.docx</code>；旧版 <code>.doc</code> 二进制格式请先用 Word 另存为 .docx。</span>
+                <span style="color:var(--dgut-warn);">仅支持 <code>.docx</code>；旧版 <code>.doc</code> 二进制格式请先用 Word 另存为 .docx。</span><br>
+                <b>依赖说明</b>：首次使用时会自动从 CDN 加载 mammoth / html2canvas / jsPDF（jsDelivr 主源，unpkg 备源，失败后走 GM 拉取），需联网。
             </div>
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
@@ -2872,32 +2922,29 @@ ${signaturesHtml(signatures)}
                     <span style="color:var(--dgut-on-surface-variant);font-size:12px;">选择文件后点击上方按钮进行转换…</span>
                 </div>
             </div>`;
-
         const fileEl = ac.querySelector('#dgut-wp-file');
         const titleEl = ac.querySelector('#dgut-wp-title');
         const statusEl = ac.querySelector('#dgut-wp-status');
         const previewEl = ac.querySelector('#dgut-wp-preview');
-
         const setStatus = (msg, isErr) => {
             statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`;
         };
         const resolveTitle = (file) => (titleEl.value || '').trim() || file.name.replace(/\.docx$/i, '') || `Word文档_${dateKey()}`;
-
         ac.querySelector('#dgut-wp-pdf').onclick = async (e) => {
             const btn = e.currentTarget;
             const file = fileEl.files && fileEl.files[0];
-            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            if (!file) { setStatus(errFull(ERR.WP_NO_FILE), true); return; }
             const oldText = btn.textContent;
             btn.disabled = true; btn.textContent = '生成中…';
-            setStatus('正在解析文档…');
+            setStatus('正在加载依赖并解析文档…');
             try {
                 const { html, messages } = await wpParseDocxFile(file);
-                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
                 saveDocTitle(title);
                 setStatus('正在生成 PDF（大文档可能需要十几秒）…');
-                const blob = await htmlToPdfBlob(html, title);
+                const blob = await htmlToPdfBlob(html, title, (cur, tot) => { btn.textContent = `生成中 ${cur}/${tot}`; });
                 imgDownloadBlob(blob, `${title}.pdf`);
                 const warns = (messages || []).filter(m => m.type === 'warning').length;
                 setStatus(`✓ 已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）${warns ? `，${warns} 条兼容性警告` : ''}`);
@@ -2907,33 +2954,29 @@ ${signaturesHtml(signatures)}
                 btn.disabled = false; btn.textContent = oldText;
             }
         };
-
         ac.querySelector('#dgut-wp-print').onclick = async () => {
             const file = fileEl.files && fileEl.files[0];
-            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            if (!file) { setStatus(errFull(ERR.WP_NO_FILE), true); return; }
             setStatus('正在解析…');
             try {
                 const { html, messages } = await wpParseDocxFile(file);
-                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
                 saveDocTitle(title);
-                const win = openPrintWindow(wpBuildPrintHtml(html, title), title);
+                const win = openPrintWindow(wpBuildPrintHtml(html, title));
                 if (!win) throw new Error('弹窗被拦截，请允许本站弹窗后重试');
                 const warns = (messages || []).filter(m => m.type === 'warning').length;
                 setStatus(`✓ 解析完成，已在打印视图中打开。${warns ? `（${warns} 条兼容性警告，可忽略）` : ''}`);
-            } catch (e) {
-                setStatus('转换失败：' + e.message, true);
-            }
+            } catch (e) { setStatus('转换失败：' + e.message, true); }
         };
-
         ac.querySelector('#dgut-wp-word').onclick = async () => {
             const file = fileEl.files && fileEl.files[0];
-            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            if (!file) { setStatus(errFull(ERR.WP_NO_FILE), true); return; }
             setStatus('正在解析…');
             try {
                 const { html } = await wpParseDocxFile(file);
-                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
                 saveDocTitle(title);
@@ -2945,17 +2988,13 @@ ${signaturesHtml(signatures)}
                 document.body.appendChild(a); a.click(); a.remove();
                 setTimeout(() => URL.revokeObjectURL(a.href), 5000);
                 setStatus(`✓ 已导出：${title}.doc`);
-            } catch (e) {
-                setStatus('导出失败：' + e.message, true);
-            }
+            } catch (e) { setStatus('导出失败：' + e.message, true); }
         };
     }
 
-
     /* ============================================================
-     * 图片工具
+     * 图片工具（像素处理走 Web Worker）
      * ============================================================ */
-
     const IMG_RATIO_PRESETS = [
         { id: 'orig',   label: '原始比例',             w: 0,  h: 0 },
         { id: '1:1',    label: '1 : 1（正方形）',       w: 1,  h: 1 },
@@ -2968,52 +3007,170 @@ ${signaturesHtml(signatures)}
         { id: '21:9',   label: '21 : 9（超宽）',        w: 21, h: 9 },
         { id: 'custom', label: '自定义（手动填宽高）',  w: -1, h: -1 }
     ];
-
     let gImgState = null;
 
-    function imgFmtSize(bytes) {
-        if (bytes === undefined || bytes === null || isNaN(bytes)) return '--';
-        if (bytes < 1024) return bytes + ' B';
-        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-        return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+    /* ---------- Web Worker：像素级滤镜多线程执行 ---------- */
+    const IMG_WORKER_SRC = `
+'use strict';
+function applyConvolution(data, width, height, kernel, divisor, offset) {
+    const out = new Uint8ClampedArray(data.length);
+    const kh = kernel.length, kw = kernel[0].length;
+    const cy = (kh >> 1), cx = (kw >> 1);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            let r = 0, g = 0, b = 0;
+            for (let ky = 0; ky < kh; ky++) {
+                const py = Math.min(height - 1, Math.max(0, y + ky - cy));
+                for (let kx = 0; kx < kw; kx++) {
+                    const px = Math.min(width - 1, Math.max(0, x + kx - cx));
+                    const idx = (py * width + px) * 4;
+                    const k = kernel[ky][kx];
+                    r += data[idx] * k; g += data[idx + 1] * k; b += data[idx + 2] * k;
+                }
+            }
+            const i = (y * width + x) * 4;
+            out[i]     = r / divisor + offset;
+            out[i + 1] = g / divisor + offset;
+            out[i + 2] = b / divisor + offset;
+            out[i + 3] = data[i + 3];
+        }
     }
+    return out;
+}
+function sharpen(data, width, height, amount) {
+    const a = Math.max(0.05, Math.min(3, Number(amount) || 1));
+    const center = 1 + 4 * a;
+    return applyConvolution(data, width, height, [[0, -a, 0], [-a, center, -a], [0, -a, 0]], 1, 0);
+}
+function blackwhite(data, width, height, threshold) {
+    const t = Math.max(0, Math.min(255, Number(threshold) || 128));
+    const out = new Uint8ClampedArray(data.length);
+    for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const v = lum >= t ? 255 : 0;
+        out[i] = out[i + 1] = out[i + 2] = v;
+        out[i + 3] = data[i + 3];
+    }
+    return out;
+}
+function equalize(data, width, height) {
+    const total = width * height;
+    const hist = new Uint32Array(256);
+    const lumArr = new Uint8ClampedArray(total);
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        lumArr[j] = lum; hist[lum]++;
+    }
+    const cdf = new Uint32Array(256);
+    let acc = 0;
+    for (let i = 0; i < 256; i++) { acc += hist[i]; cdf[i] = acc; }
+    let cdfMin = 0;
+    for (let i = 0; i < 256; i++) { if (cdf[i] > 0) { cdfMin = cdf[i]; break; } }
+    const denom = Math.max(1, total - cdfMin);
+    const map = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) map[i] = Math.round((cdf[i] - cdfMin) / denom * 255);
+    const out = new Uint8ClampedArray(data.length);
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        const lum = lumArr[j];
+        const newLum = map[lum];
+        const scale = lum > 0 ? Math.min(4, newLum / lum) : 1;
+        out[i]     = Math.min(255, Math.round(data[i] * scale));
+        out[i + 1] = Math.min(255, Math.round(data[i + 1] * scale));
+        out[i + 2] = Math.min(255, Math.round(data[i + 2] * scale));
+        out[i + 3] = data[i + 3];
+    }
+    return out;
+}
+self.onmessage = function (e) {
+    const d = e.data || {};
+    const id = d.id, width = d.width, height = d.height, params = d.params || {};
+    try {
+        let data = new Uint8ClampedArray(d.buffer);
+        if (params.sharpen) data = sharpen(data, width, height, params.sharpenAmount);
+        if (params.bw)      data = blackwhite(data, width, height, params.bwThreshold);
+        if (params.eq)      data = equalize(data, width, height);
+        self.postMessage({ id: id, ok: true, buffer: data.buffer }, [data.buffer]);
+    } catch (err) {
+        self.postMessage({ id: id, ok: false, error: (err && err.message) ? err.message : String(err) });
+    }
+};
+`;
 
-    function imgFileToImage(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const img = new Image();
-                img.onload = () => resolve({ img, dataUrl: reader.result, file });
-                img.onerror = () => reject(new Error('图片解码失败'));
-                img.src = reader.result;
+    let gImgWorker = null, gImgWorkerFailed = false, gImgTaskId = 0;
+    const gImgPending = new Map();
+
+    function getImgWorker() {
+        if (gImgWorkerFailed) return null;
+        if (gImgWorker) return gImgWorker;
+        if (typeof Worker !== 'function') { gImgWorkerFailed = true; return null; }
+        try {
+            const blob = new Blob([IMG_WORKER_SRC], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            const w = new Worker(url);
+            w.onmessage = (e) => {
+                const d = e.data || {};
+                const p = gImgPending.get(d.id);
+                if (!p) return;
+                gImgPending.delete(d.id);
+                if (d.ok) p.resolve(d.buffer);
+                else p.reject(new Error(d.error || 'Worker 处理失败'));
             };
-            reader.onerror = () => reject(new Error('读取文件失败'));
-            reader.readAsDataURL(file);
-        });
+            w.onerror = () => {
+                gImgWorkerFailed = true;
+                gImgWorker = null;
+                gImgPending.forEach(p => p.reject(new Error('Worker 运行错误')));
+                gImgPending.clear();
+            };
+            gImgWorker = w;
+            log('[图片] Web Worker 已启动，像素处理将多线程执行');
+            return w;
+        } catch (e) {
+            gImgWorkerFailed = true;
+            return null;
+        }
     }
 
-    function imgCanvasToBlob(canvas, mime, quality) {
+    function imgWorkerRun(buffer, width, height, params) {
+        const w = getImgWorker();
+        if (!w) return Promise.reject(new Error('Worker 不可用'));
+        const id = ++gImgTaskId;
         return new Promise((resolve, reject) => {
-            try {
-                canvas.toBlob((b) => {
-                    if (!b) return reject(new Error('导出失败（浏览器可能不支持该格式）'));
-                    if (mime === 'image/webp' && b.type !== 'image/webp') {
-                        return reject(new Error('当前浏览器不支持 WebP 编码，请改用 JPEG/PNG'));
-                    }
-                    resolve(b);
-                }, mime, typeof quality === 'number' ? quality : undefined);
-            } catch (e) { reject(e); }
+            gImgPending.set(id, { resolve, reject });
+            try { w.postMessage({ id, buffer, width, height, params }, [buffer]); }
+            catch (e) { gImgPending.delete(id); reject(e); return; }
+            setTimeout(() => {
+                if (gImgPending.has(id)) { gImgPending.delete(id); reject(new Error('Worker 超时')); }
+            }, 60000);
         });
     }
 
-    function imgDownloadBlob(blob, filename) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = filename;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
+    async function imgApplyFiltersAsync(canvas, cfg) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, h = canvas.height;
+        if (!w || !h) return;
+        if (getImgWorker()) {
+            try {
+                const imgData = ctx.getImageData(0, 0, w, h);
+                const buf = await imgWorkerRun(imgData.data.buffer, w, h, {
+                    sharpen: cfg.sharpen, sharpenAmount: cfg.sharpenAmount,
+                    bw: cfg.bw, bwThreshold: cfg.bwThreshold,
+                    eq: cfg.eq
+                });
+                ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+                return;
+            } catch (e) {
+                log('[图片] Worker 处理失败，回退主线程：', e.message);
+            }
+        }
+        // 主线程兜底（注意 buffer 可能已被 transfer 清空，需重新取）
+        let d = ctx.getImageData(0, 0, w, h);
+        if (cfg.sharpen) d = imgApplySharpen(d, cfg.sharpenAmount);
+        if (cfg.bw) d = imgApplyBlackWhite(d, cfg.bwThreshold);
+        if (cfg.eq) d = imgApplyHistEqualize(d);
+        ctx.putImageData(d, 0, 0);
     }
 
+    /* ---------- 主线程版的滤镜实现（作为 Worker 不可用时的兜底） ---------- */
     function imgApplyConvolution(imageData, kernel, divisor = 1, offset = 0) {
         const { width, height, data } = imageData;
         const out = new Uint8ClampedArray(data.length);
@@ -3028,9 +3185,7 @@ ${signaturesHtml(signatures)}
                         const px = Math.min(width - 1, Math.max(0, x + kx - cx));
                         const idx = (py * width + px) * 4;
                         const k = kernel[ky][kx];
-                        r += data[idx] * k;
-                        g += data[idx + 1] * k;
-                        b += data[idx + 2] * k;
+                        r += data[idx] * k; g += data[idx + 1] * k; b += data[idx + 2] * k;
                     }
                 }
                 const i = (y * width + x) * 4;
@@ -3042,18 +3197,11 @@ ${signaturesHtml(signatures)}
         }
         return new ImageData(out, width, height);
     }
-
     function imgApplySharpen(imageData, amount = 1) {
         const a = Math.max(0.05, Math.min(3, Number(amount) || 1));
         const center = 1 + 4 * a;
-        const kernel = [
-            [0,      -a,       0],
-            [-a,     center,  -a],
-            [0,      -a,       0]
-        ];
-        return imgApplyConvolution(imageData, kernel, 1, 0);
+        return imgApplyConvolution(imageData, [[0, -a, 0], [-a, center, -a], [0, -a, 0]], 1, 0);
     }
-
     function imgApplyBlackWhite(imageData, threshold = 128) {
         const t = Math.max(0, Math.min(255, Number(threshold) || 128));
         const { width, height, data } = imageData;
@@ -3066,18 +3214,15 @@ ${signaturesHtml(signatures)}
         }
         return new ImageData(out, width, height);
     }
-
     function imgApplyHistEqualize(imageData) {
         const { width, height, data } = imageData;
         const hist = new Uint32Array(256);
         const lumArr = new Uint8ClampedArray(width * height);
         for (let i = 0, j = 0; i < data.length; i += 4, j++) {
             const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-            lumArr[j] = lum;
-            hist[lum]++;
+            lumArr[j] = lum; hist[lum]++;
         }
-        const cdf = new Uint32Array(256);
-        let acc = 0;
+        const cdf = new Uint32Array(256); let acc = 0;
         for (let i = 0; i < 256; i++) { acc += hist[i]; cdf[i] = acc; }
         let cdfMin = 0;
         for (let i = 0; i < 256; i++) { if (cdf[i] > 0) { cdfMin = cdf[i]; break; } }
@@ -3098,14 +3243,47 @@ ${signaturesHtml(signatures)}
         return new ImageData(out, width, height);
     }
 
-    /**
-     * 多步降采样：先逐次减半到接近目标尺寸，再最后一步插值到位。
-     * 相比一次 drawImage 直接缩到目标，能显著减少细节丢失 / 摩尔纹 / 硬边。
-     */
+    /* ---------- 通用工具 ---------- */
+    function imgFmtSize(bytes) {
+        if (bytes === undefined || bytes === null || isNaN(bytes)) return '--';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+    }
+    function imgFileToImage(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => resolve({ img, dataUrl: reader.result, file });
+                img.onerror = () => reject(new Error(errFull(ERR.IMG_DECODE_FAIL)));
+                img.src = reader.result;
+            };
+            reader.onerror = () => reject(new Error(errFull(ERR.IMG_READ_FAIL)));
+            reader.readAsDataURL(file);
+        });
+    }
+    function imgCanvasToBlob(canvas, mime, quality) {
+        return new Promise((resolve, reject) => {
+            try {
+                canvas.toBlob((b) => {
+                    if (!b) return reject(new Error(errFull(ERR.IMG_ENCODE_FAIL)));
+                    if (mime === 'image/webp' && b.type !== 'image/webp') return reject(new Error(errFull(ERR.IMG_ENCODE_FAIL, '浏览器不支持 WebP 编码')));
+                    resolve(b);
+                }, mime, typeof quality === 'number' ? quality : undefined);
+            } catch (e) { reject(e); }
+        });
+    }
+    function imgDownloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
     function imgProgressiveScale(src, targetW, targetH) {
         targetW = Math.max(1, Math.round(targetW));
         targetH = Math.max(1, Math.round(targetH));
-
         let cur = src, cw = src.width, ch = src.height, guard = 0;
         while (guard++ < 16 && (cw > targetW * 2 || ch > targetH * 2)) {
             const nw = Math.max(targetW, Math.round(cw / 2));
@@ -3120,7 +3298,6 @@ ${signaturesHtml(signatures)}
             cur = nc; cw = nw; ch = nh;
         }
         if (cw === targetW && ch === targetH) return cur;
-
         const fc = document.createElement('canvas');
         fc.width = targetW; fc.height = targetH;
         const fx = fc.getContext('2d');
@@ -3129,7 +3306,6 @@ ${signaturesHtml(signatures)}
         fx.drawImage(cur, 0, 0, targetW, targetH);
         return fc;
     }
-
     function imgComputeTargetSize(srcW, srcH, cfg) {
         if (cfg.sizeMode === 'none') return { w: srcW, h: srcH };
         if (cfg.sizeMode === 'percent') {
@@ -3138,9 +3314,7 @@ ${signaturesHtml(signatures)}
         }
         const preset = IMG_RATIO_PRESETS.find(p => p.id === cfg.ratioPreset) || IMG_RATIO_PRESETS[0];
         let rw = srcW, rh = srcH;
-        if (preset.id !== 'orig' && preset.id !== 'custom' && preset.w > 0 && preset.h > 0) {
-            rw = preset.w; rh = preset.h;
-        }
+        if (preset.id !== 'orig' && preset.id !== 'custom' && preset.w > 0 && preset.h > 0) { rw = preset.w; rh = preset.h; }
         const W = Math.round(Number(cfg.targetW) || 0);
         const H = Math.round(Number(cfg.targetH) || 0);
         if (W > 0 && H > 0) return { w: W, h: H };
@@ -3148,57 +3322,32 @@ ${signaturesHtml(signatures)}
         if (H > 0) return { w: Math.max(1, Math.round(H * rw / rh)), h: H };
         return { w: srcW, h: srcH };
     }
-
-    /**
-     * 绘制缩放结果。
-     * @param {HTMLCanvasElement} srcCanvas 源
-     * @param {number} targetW 目标宽
-     * @param {number} targetH 目标高
-     * @param {'contain'|'cover'|'fill'} fit 适配方式
-     * @param {'high'|'browser'|'none'} smooth 平滑策略
-     */
     function imgDrawResized(srcCanvas, targetW, targetH, fit, smooth) {
         targetW = Math.max(1, Math.round(targetW));
         targetH = Math.max(1, Math.round(targetH));
         const sw = srcCanvas.width, sh = srcCanvas.height;
-
         const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
+        canvas.width = targetW; canvas.height = targetH;
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = (smooth !== 'none');
         ctx.imageSmoothingQuality = 'high';
-
         let dx, dy, dw, dh;
-        if (fit === 'fill') {
-            dx = 0; dy = 0; dw = targetW; dh = targetH;
-        } else {
-            const s = fit === 'contain'
-                ? Math.min(targetW / sw, targetH / sh)
-                : Math.max(targetW / sw, targetH / sh);
+        if (fit === 'fill') { dx = 0; dy = 0; dw = targetW; dh = targetH; }
+        else {
+            const s = fit === 'contain' ? Math.min(targetW / sw, targetH / sh) : Math.max(targetW / sw, targetH / sh);
             dw = sw * s; dh = sh * s;
-            dx = (targetW - dw) / 2;
-            dy = (targetH - dh) / 2;
+            dx = (targetW - dw) / 2; dy = (targetH - dh) / 2;
         }
-
-        // 需要明显缩小时，走多步降采样
         const shrink = Math.min(dw / sw, dh / sh);
         let drawSrc = srcCanvas, drawX = dx, drawY = dy, drawW = dw, drawH = dh;
-
         if (smooth === 'high' && shrink < 0.5 && !(Math.abs(dw - sw) < 0.5 && Math.abs(dh - sh) < 0.5)) {
             const scaled = imgProgressiveScale(srcCanvas, dw, dh);
             drawSrc = scaled;
-            drawW = scaled.width;
-            drawH = scaled.height;
-            drawX = (targetW - drawW) / 2;
-            drawY = (targetH - drawH) / 2;
+            drawW = scaled.width; drawH = scaled.height;
+            drawX = (targetW - drawW) / 2; drawY = (targetH - drawH) / 2;
         }
-
         if (fit === 'cover') {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(0, 0, targetW, targetH);
-            ctx.clip();
+            ctx.save(); ctx.beginPath(); ctx.rect(0, 0, targetW, targetH); ctx.clip();
             ctx.drawImage(drawSrc, drawX, drawY, drawW, drawH);
             ctx.restore();
         } else {
@@ -3206,11 +3355,8 @@ ${signaturesHtml(signatures)}
         }
         return canvas;
     }
-
-    // 逐级降分辨率逼近目标大小
     async function imgCompressByResize(canvas, targetBytes, mime, smooth) {
-        let cur = canvas;
-        let last = null;
+        let cur = canvas, last = null;
         for (let iter = 0; iter < 10; iter++) {
             let blob;
             try { blob = await imgCanvasToBlob(cur, mime, 0.72); }
@@ -3230,11 +3376,6 @@ ${signaturesHtml(signatures)}
         }
         return last;
     }
-
-    /**
-     * 压缩到目标大小
-     * @returns {Promise<{blob: Blob|null, achieved: boolean}>}
-     */
     async function imgCompressToTargetSize(canvas, targetBytes, mime, allowResize, smooth) {
         if (mime === 'image/png') {
             const first = await imgCanvasToBlob(canvas, mime, 1.0);
@@ -3243,10 +3384,8 @@ ${signaturesHtml(signatures)}
             const resized = await imgCompressByResize(canvas, targetBytes, mime, smooth);
             return { blob: resized || first, achieved: !!(resized && resized.size <= targetBytes) };
         }
-
         const maxBlob = await imgCanvasToBlob(canvas, mime, 1.0);
         if (maxBlob.size <= targetBytes) return { blob: maxBlob, achieved: true };
-
         let lo = 0.01, hi = 1.0, best = null;
         for (let i = 0; i < 12; i++) {
             const mid = (lo + hi) / 2;
@@ -3257,19 +3396,13 @@ ${signaturesHtml(signatures)}
             else { hi = mid; }
         }
         if (best) return { blob: best, achieved: true };
-
         let minBlob;
         try { minBlob = await imgCanvasToBlob(canvas, mime, 0.01); }
         catch (e) { minBlob = null; }
-
-        if (!allowResize) {
-            return { blob: minBlob || maxBlob, achieved: false };
-        }
+        if (!allowResize) return { blob: minBlob || maxBlob, achieved: false };
         const resized = await imgCompressByResize(canvas, targetBytes, mime, smooth);
         return { blob: resized || minBlob || maxBlob, achieved: !!(resized && resized.size <= targetBytes) };
     }
-
-    // 增大：在文件末尾追加数据到指定大小
     async function imgInflateToSize(blob, targetBytes, mode) {
         if (blob.size >= targetBytes) return blob;
         const buf = await blob.arrayBuffer();
@@ -3286,23 +3419,16 @@ ${signaturesHtml(signatures)}
         }
         return new Blob([combined], { type: blob.type });
     }
-
     function imgLoadCfg() {
         const d = {
             sizeMode: 'none', percent: 100, targetW: 0, targetH: 0,
-            ratioPreset: 'orig', fit: 'contain',
-            format: 'keep', quality: 92,
-            targetSizeKB: 0, allowResize: false,
-            inflateKB: 0, inflateMode: 'random',
-            sharpen: false, sharpenAmount: 1,
-            bw: false, bwThreshold: 128,
-            eq: false,
-            smooth: 'high'
+            ratioPreset: 'orig', fit: 'contain', format: 'keep', quality: 92,
+            targetSizeKB: 0, allowResize: false, inflateKB: 0, inflateMode: 'random',
+            sharpen: false, sharpenAmount: 1, bw: false, bwThreshold: 128, eq: false, smooth: 'high'
         };
         return Object.assign(d, GM_getValue(IMG_CFG_KEY, {}) || {});
     }
     function imgSaveCfg(cfg) { GM_setValue(IMG_CFG_KEY, Object.assign(imgLoadCfg(), cfg)); }
-
     function imgReadCfg(ac) {
         const q = (sel) => ac.querySelector(sel);
         const num = (sel, dft) => { const v = Number(q(sel)?.value); return isNaN(v) ? dft : v; };
@@ -3327,35 +3453,17 @@ ${signaturesHtml(signatures)}
             smooth: q('#dgut-img-smooth')?.value || 'high'
         };
     }
-
     async function imgRunPipeline(ac) {
         const st = gImgState;
-        if (!st || !st.img) throw new Error('请先选择一张图片');
+        if (!st || !st.img) throw new Error(errFull(ERR.IMG_NO_FILE));
         const cfg = imgReadCfg(ac);
-
-        // 1) 源画布
         let canvas = document.createElement('canvas');
-        canvas.width = st.img.naturalWidth;
-        canvas.height = st.img.naturalHeight;
+        canvas.width = st.img.naturalWidth; canvas.height = st.img.naturalHeight;
         let ctx = canvas.getContext('2d');
         ctx.drawImage(st.img, 0, 0);
-
-        // 2) 滤镜处理
-        if (cfg.sharpen || cfg.bw || cfg.eq) {
-            let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            if (cfg.sharpen) imgData = imgApplySharpen(imgData, cfg.sharpenAmount);
-            if (cfg.bw) imgData = imgApplyBlackWhite(imgData, cfg.bwThreshold);
-            if (cfg.eq) imgData = imgApplyHistEqualize(imgData);
-            ctx.putImageData(imgData, 0, 0);
-        }
-
-        // 3) 缩放
+        if (cfg.sharpen || cfg.bw || cfg.eq) await imgApplyFiltersAsync(canvas, cfg);
         const tgt = imgComputeTargetSize(canvas.width, canvas.height, cfg);
-        if (tgt.w !== canvas.width || tgt.h !== canvas.height) {
-            canvas = imgDrawResized(canvas, tgt.w, tgt.h, cfg.fit, cfg.smooth);
-        }
-
-        // 4) 编码
+        if (tgt.w !== canvas.width || tgt.h !== canvas.height) canvas = imgDrawResized(canvas, tgt.w, tgt.h, cfg.fit, cfg.smooth);
         let mime;
         switch (cfg.format) {
             case 'jpeg': mime = 'image/jpeg'; break;
@@ -3365,28 +3473,22 @@ ${signaturesHtml(signatures)}
                 mime = (st.file && st.file.type) || 'image/png';
                 if (mime === 'image/jpg') mime = 'image/jpeg';
         }
-
         let blob, achieved = true, targetBytes = 0;
         if (cfg.targetSizeKB > 0) {
             targetBytes = cfg.targetSizeKB * 1024;
             const r = await imgCompressToTargetSize(canvas, targetBytes, mime, cfg.allowResize, cfg.smooth);
-            blob = r.blob;
-            achieved = r.achieved;
+            blob = r.blob; achieved = r.achieved;
         } else {
             blob = await imgCanvasToBlob(canvas, mime, cfg.quality);
         }
-        if (!blob) throw new Error('编码失败');
-
-        // 5) 增大
+        if (!blob) throw new Error(errFull(ERR.IMG_ENCODE_FAIL));
         let inflated = false;
         if (cfg.inflateKB > 0 && blob.size < cfg.inflateKB * 1024) {
             blob = await imgInflateToSize(blob, cfg.inflateKB * 1024, cfg.inflateMode);
             inflated = true;
         }
-
-        return { canvas, blob, mime, inflated, achieved, targetBytes, cfg };
+        return { canvas, blob, mime, inflated, achieved, targetBytes };
     }
-
     function imgExtFromMime(mime) {
         if (mime === 'image/jpeg') return 'jpg';
         if (mime === 'image/webp') return 'webp';
@@ -3394,35 +3496,30 @@ ${signaturesHtml(signatures)}
         if (mime === 'image/gif') return 'gif';
         return 'png';
     }
-
     function renderImageToolView(ac) {
         const saved = imgLoadCfg();
         const ratioOpts = IMG_RATIO_PRESETS.map(p => `<option value="${p.id}" ${p.id === saved.ratioPreset ? 'selected' : ''}>${p.label}</option>`).join('');
         const opt = (v, cur) => v === cur ? ' selected' : '';
-        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 黑白 / 亮度均匀') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 黑白 / 亮度均匀（像素处理多线程）') + `
             <div class="dgut-hint">
                 <b>说明</b><br>
                 · 所有处理均在浏览器本地完成，图片不上传服务器。<br>
-                · <b>平滑</b>除极限情况下建议保持「高质量」<br>
+                · <b>像素滤镜（锐化/黑白/亮度均匀）默认在 Web Worker 中执行</b>，不阻塞主线程；不可用时自动回退主线程。<br>
+                · <b>平滑</b>除极限情况下建议保持「高质量」。<br>
                 · 压缩：填了「目标大小」时，脚本自动调节质量逼近该大小；未填时，使用「输出质量」。<br>
                 · 目标大小过小时，默认不降低分辨率；勾选「允许降低分辨率」可进一步压缩。<br>
                 · 增大：将图片增大到指定大小，注意不是超分。
             </div>
-
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
                     <input type="file" id="dgut-img-file" accept="image/*" class="dgut-input" style="flex:1;min-width:0;">
                     <button id="dgut-img-reset" class="dgut-btn" style="flex:none;">重置</button>
                 </div>
-                <div id="dgut-img-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;line-height:1.7;">
-                    尚未选择图片。
-                </div>
+                <div id="dgut-img-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;line-height:1.7;">尚未选择图片。</div>
                 <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;padding:10px;text-align:center;">
-                    <canvas id="dgut-img-preview" style="max-width:100%;max-height:300px;border-radius:6px;background:
-                        repeating-conic-gradient(var(--dgut-surface-3) 0% 25%, var(--dgut-surface-2) 0% 50%) 50% / 16px 16px;"></canvas>
+                    <canvas id="dgut-img-preview" style="max-width:100%;max-height:300px;border-radius:6px;background:repeating-conic-gradient(var(--dgut-surface-3) 0% 25%, var(--dgut-surface-2) 0% 50%) 50% / 16px 16px;"></canvas>
                 </div>
             </div>
-
             <div class="dgut-card">
                 <div class="dgut-section-title">缩放</div>
                 <div class="dgut-row dgut-row--mb">
@@ -3458,15 +3555,14 @@ ${signaturesHtml(signatures)}
                         <select id="dgut-img-smooth" class="dgut-select" style="padding:5px 8px;">
                             <option value="high"${opt('high', saved.smooth)}>高质量</option>
                             <option value="browser"${opt('browser', saved.smooth)}>标准</option>
-                            <option value="none"${opt('none', saved.smooth)}>关闭option>
+                            <option value="none"${opt('none', saved.smooth)}>关闭</option>
                         </select>
                     </label>
                     <span style="font-size:11px;color:var(--dgut-outline);">缩小较多时选「高质量」，可减轻毛糙</span>
                 </div>
             </div>
-
             <div class="dgut-card">
-                <div class="dgut-section-title">图像处理</div>
+                <div class="dgut-section-title">图像处理 <span style="font-weight:400;font-size:11px;color:var(--dgut-on-surface-variant);">（Web Worker 多线程）</span></div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label"><input type="checkbox" id="dgut-img-sharpen" ${saved.sharpen ? 'checked' : ''}> 锐化</label>
                     <label class="dgut-label">强度
@@ -3484,7 +3580,6 @@ ${signaturesHtml(signatures)}
                     <label class="dgut-label"><input type="checkbox" id="dgut-img-eq" ${saved.eq ? 'checked' : ''}> 亮度均匀</label>
                 </div>
             </div>
-
             <div class="dgut-card">
                 <div class="dgut-section-title">输出</div>
                 <div class="dgut-row dgut-row--mb">
@@ -3524,12 +3619,10 @@ ${signaturesHtml(signatures)}
                 </div>
                 <div id="dgut-img-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-top:10px;line-height:1.7;"></div>
             </div>
-
             <div class="dgut-row dgut-row--end">
                 <button id="dgut-img-run" class="dgut-btn">${icons.list} 预览效果</button>
                 <button id="dgut-img-dl" class="dgut-btn dgut-btn-primary">${icons.export} 处理并下载</button>
             </div>`;
-
         const infoEl = ac.querySelector('#dgut-img-info');
         const statusEl = ac.querySelector('#dgut-img-status');
         const canvasEl = ac.querySelector('#dgut-img-preview');
@@ -3541,24 +3634,16 @@ ${signaturesHtml(signatures)}
         const targetEl = ac.querySelector('#dgut-img-target');
         const qualityEl = ac.querySelector('#dgut-img-quality');
         const qualityNoteEl = ac.querySelector('#dgut-img-quality-note');
-
-        const setStatus = (msg, isErr) => {
-            statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`;
-        };
-
+        const setStatus = (msg, isErr) => { statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`; };
         const refreshVisibility = () => {
             const m = sizeModeEl.value;
-            ac.querySelectorAll('[data-when]').forEach(el => {
-                el.style.display = (el.dataset.when === m) ? '' : 'none';
-            });
+            ac.querySelectorAll('[data-when]').forEach(el => { el.style.display = (el.dataset.when === m) ? '' : 'none'; });
         };
-
         const refreshOutputState = () => {
             const useTarget = Number(targetEl.value) > 0;
             qualityEl.disabled = useTarget;
             qualityNoteEl.textContent = useTarget ? '（已设定目标大小，质量自动调节）' : '';
         };
-
         const syncFromWidth = () => {
             const preset = IMG_RATIO_PRESETS.find(p => p.id === ratioEl.value);
             if (!preset || preset.id === 'orig' || preset.id === 'custom') return;
@@ -3571,34 +3656,21 @@ ${signaturesHtml(signatures)}
             const H = Number(hEl.value) || 0;
             if (H > 0) wEl.value = Math.max(1, Math.round(H * preset.w / preset.h));
         };
-
-        const persistCfg = () => {
-            try { imgSaveCfg(imgReadCfg(ac)); } catch (e) {}
-        };
-
+        const persistCfg = () => { try { imgSaveCfg(imgReadCfg(ac)); } catch (e) {} };
         sizeModeEl.addEventListener('change', () => { refreshVisibility(); persistCfg(); });
         wEl.addEventListener('input', () => { syncFromWidth(); persistCfg(); });
         hEl.addEventListener('input', () => { syncFromHeight(); persistCfg(); });
-        ratioEl.addEventListener('change', () => {
-            if (wEl.value) syncFromWidth();
-            else if (hEl.value) syncFromHeight();
-            persistCfg();
-        });
+        ratioEl.addEventListener('change', () => { if (wEl.value) syncFromWidth(); else if (hEl.value) syncFromHeight(); persistCfg(); });
         targetEl.addEventListener('input', () => { refreshOutputState(); persistCfg(); });
         ac.querySelectorAll('#dgut-img-smooth, #dgut-img-fit, #dgut-img-format, #dgut-img-inflate-mode, #dgut-img-allow-resize, #dgut-img-sharpen, #dgut-img-bw, #dgut-img-eq, #dgut-img-quality')
             .forEach(el => el.addEventListener('change', persistCfg));
-
-        refreshVisibility();
-        refreshOutputState();
-
+        refreshVisibility(); refreshOutputState();
         ac.querySelector('#dgut-img-reset').onclick = () => {
-            gImgState = null;
-            fileEl.value = '';
+            gImgState = null; fileEl.value = '';
             infoEl.textContent = '尚未选择图片。';
             canvasEl.width = 0; canvasEl.height = 0;
             setStatus('');
         };
-
         fileEl.addEventListener('change', async () => {
             const file = fileEl.files && fileEl.files[0];
             if (!file) return;
@@ -3606,36 +3678,27 @@ ${signaturesHtml(signatures)}
             try {
                 const { img } = await imgFileToImage(file);
                 gImgState = { img, file, name: file.name, size: file.size, type: file.type };
-                infoEl.innerHTML =
-                    `原始尺寸：<b>${img.naturalWidth} × ${img.naturalHeight}</b> px · ` +
-                    `文件大小：<b>${imgFmtSize(file.size)}</b> · 类型：<b>${escapeHtml(file.type || '未知')}</b>`;
-                canvasEl.width = img.naturalWidth;
-                canvasEl.height = img.naturalHeight;
+                infoEl.innerHTML = `原始尺寸：<b>${img.naturalWidth} × ${img.naturalHeight}</b> px · 文件大小：<b>${imgFmtSize(file.size)}</b> · 类型：<b>${escapeHtml(file.type || '未知')}</b>`;
+                canvasEl.width = img.naturalWidth; canvasEl.height = img.naturalHeight;
                 const c = canvasEl.getContext('2d');
                 c.clearRect(0, 0, canvasEl.width, canvasEl.height);
                 c.drawImage(img, 0, 0);
                 if (!wEl.value) wEl.value = img.naturalWidth;
                 if (!hEl.value) hEl.value = img.naturalHeight;
                 setStatus('已载入，可调整参数后点击「预览效果」或「处理并下载」。');
-            } catch (e) {
-                gImgState = null;
-                setStatus('读取失败：' + e.message, true);
-            }
+            } catch (e) { gImgState = null; setStatus('读取失败：' + e.message, true); }
         });
-
         const doPreview = async () => {
             try {
                 setStatus('处理中…');
                 const { canvas, blob, inflated, achieved, targetBytes } = await imgRunPipeline(ac);
-                canvasEl.width = canvas.width;
-                canvasEl.height = canvas.height;
+                canvasEl.width = canvas.width; canvasEl.height = canvas.height;
                 const c = canvasEl.getContext('2d');
                 c.clearRect(0, 0, canvas.width, canvas.height);
                 c.drawImage(canvas, 0, 0);
-
                 let msg;
                 if (targetBytes > 0 && !achieved) {
-                    msg = `⚠ 已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)}· 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
+                    msg = `⚠ 已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
                 } else if (inflated) {
                     msg = `✓ 输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}（已填充至目标大小）`;
                 } else {
@@ -3643,14 +3706,9 @@ ${signaturesHtml(signatures)}
                 }
                 setStatus(msg);
                 return { canvas, blob };
-            } catch (e) {
-                setStatus('处理失败：' + e.message, true);
-                return null;
-            }
+            } catch (e) { setStatus('处理失败：' + e.message, true); return null; }
         };
-
         ac.querySelector('#dgut-img-run').onclick = doPreview;
-
         ac.querySelector('#dgut-img-dl').onclick = async () => {
             const r = await doPreview();
             if (!r) return;
@@ -3660,12 +3718,13 @@ ${signaturesHtml(signatures)}
                 const fname = `${base}_处理_${dateKey()}.${ext}`;
                 imgDownloadBlob(r.blob, fname);
                 setStatus(`✓ 已下载 ${fname} · ${imgFmtSize(r.blob.size)}`);
-            } catch (e) {
-                setStatus('下载失败：' + e.message, true);
-            }
+            } catch (e) { setStatus('下载失败：' + e.message, true); }
         };
     }
 
+    /* ============================================================
+     * 视图路由
+     * ============================================================ */
     let gActionName = null;
     const ACTION_TITLES = {
         sign: '优学院课程签到',
@@ -3676,9 +3735,15 @@ ${signaturesHtml(signatures)}
         wordpdf: 'Word 转 PDF',
         imagetool: '图片工具（压缩/增大/处理）',
         appearance: '外观设置',
-        about: '关于与帮助'
+        detail: '详情'
     };
 
+    function actionHeader(title, hint) {
+        return `<div style="margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:700;color:var(--dgut-on-surface);line-height:1.3;">${title}</div>
+            ${hint ? `<div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:2px;">${hint}</div>` : ''}
+        </div>`;
+    }
     function openActionView(name) {
         if (name) GM_setValue(VIEW_MODE_KEY, name);
         const mode = name || GM_getValue(VIEW_MODE_KEY, 'sign');
@@ -3695,12 +3760,6 @@ ${signaturesHtml(signatures)}
         document.querySelector(`.dgut-nav[data-action="${mode}"]`)?.classList.add('dgut-tab-active');
         renderActionView(mode);
     }
-    function actionHeader(title, hint) {
-        return `<div style="margin-bottom:14px;">
-            <div style="font-size:15px;font-weight:700;color:var(--dgut-on-surface);line-height:1.3;">${title}</div>
-            ${hint ? `<div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:2px;">${hint}</div>` : ''}
-        </div>`;
-    }
     function renderActionView(name) {
         const ac = document.getElementById('dgut-action-container');
         if (!ac) return;
@@ -3713,8 +3772,8 @@ ${signaturesHtml(signatures)}
             case 'wordpdf': renderWordPdfView(ac); break;
             case 'imagetool': renderImageToolView(ac); break;
             case 'appearance': renderAppearanceView(ac); break;
-            case 'about': renderAboutView(ac); break;
-            default: renderAboutView(ac);
+            case 'detail': renderDetailView(ac); break;
+            default: renderDetailView(ac);
         }
     }
 
@@ -3768,25 +3827,124 @@ ${signaturesHtml(signatures)}
         };
     }
 
-    const ABOUT_VERSION = 'v5.2.0';
-    function renderAboutView(ac) {
+    /* ============================================================
+     * 详情页
+     * ============================================================ */
+    const ABOUT_VERSION = 'v5.5.0';
+    const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
+
+    function renderDetailView(ac) {
+        let activeTab = GM_getValue(DETAIL_TAB_KEY, 'about');
+        ac.innerHTML = actionHeader(ACTION_TITLES.detail, '软件简介与错误代码列表') + `
+            <div class="dgut-tab-bar">
+                <button class="dgut-tab-btn ${activeTab === 'about' ? 'active' : ''}" data-tab="about">软件简介</button>
+                <button class="dgut-tab-btn ${activeTab === 'errors' ? 'active' : ''}" data-tab="errors">错误代码列表</button>
+            </div>
+            <div id="dgut-detail-content"></div>`;
+        const contentEl = ac.querySelector('#dgut-detail-content');
         const code = (s) => `<code>${s}</code>`;
-        ac.innerHTML = actionHeader(ACTION_TITLES.about) + `
-            <div class="dgut-card">
-                <div style="display:flex;align-items:center;gap:12px;">
-                    <svg viewBox="0 0 24 24" width="40" height="40" style="fill:var(--dgut-primary);flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
-                    <div>
-                        <div style="font-size:16px;font-weight:700;">优学院助手 + 文档工具</div>
-                        <div style="font-size:12px;color:var(--dgut-on-surface-variant);">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / Word 转 PDF / 图片工具 / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
+
+        const renderAbout = () => {
+            const ifr = detectIframe();
+            contentEl.innerHTML = `
+                <div class="dgut-card">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <svg viewBox="0 0 24 24" width="40" height="40" style="fill:var(--dgut-primary);flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
+                        <div>
+                            <div style="font-size:16px;font-weight:700;">优学院助手 + 文档工具</div>
+                            <div style="font-size:12px;color:var(--dgut-on-surface-variant);">${ABOUT_VERSION}</div>
+                        </div>
                     </div>
                 </div>
-                <p style="margin:10px 0 0;font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;">面向优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
-            </div>
-            <div class="dgut-hint">
-                <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片；刷课自动答题的未知题型一律跳过；文档工具（含 PDF 生成）与图片处理全部在浏览器本地完成。
-            </div>`;
+                <div class="dgut-card">
+                    <div class="dgut-section-title">运行环境</div>
+                    <div style="font-size:12px;line-height:2;">
+                        <div>域名：<b>${escapeHtml(location.hostname)}</b></div>
+                        <div>顶层窗口：<b>${ifr.isTop ? '是' : '否（iframe）'}</b></div>
+                        <div>本帧 video：<b>${ifr.hasVideo ? '有' : '无'}</b> · 课件VM：<b>${ifr.hasVM ? '有' : '无'}</b> · ko：<b>${ifr.hasKo ? '有' : '无'}</b></div>
+                        <div>Web Worker：<b>${typeof Worker === 'function' ? '可用（图片处理多线程）' : '不可用'}</b></div>
+                    </div>
+                </div>
+                <div class="dgut-card">
+                    <div class="dgut-section-title">作者与许可</div>
+                    <div style="font-size:13px;line-height:2;">
+                        <div><b>作者：</b>BrocadeHutHost</div>
+                        <div><b>开源地址：</b><a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">${GITHUB_URL.replace('https://', '')}</a>（GitHub）</div>
+                        <div><b>许可证：</b>AGPL-3.0-only</div>
+                        <div><b>版本：</b>${ABOUT_VERSION}</div>
+                    </div>
+                </div>
+                <div class="dgut-card">
+                    <div class="dgut-section-title">功能一览</div>
+                    <div style="font-size:13px;line-height:2;">
+                        · <b>课程签到</b>：轮询当日课堂，自动处理数字码 / 一键签到；userid 多源解析带置信度<br>
+                        · <b>刷课助手</b>：视频倍速守卫、自动答题、自动翻页、题库收集<br>
+                        · <b>作业互评</b>：读取互评接口，汇总与筛选记录<br>
+                        · <b>求是读书</b>：课件阅读时长统计与自动翻页<br>
+                        · <b>文档工具</b>：Markdown 转 Word / PDF（PDF 直出下载）+ 手绘电子签名<br>
+                        · <b>Word 转 PDF</b>：本地解析 .docx 并导出 PDF / .doc<br>
+                        · <b>图片工具</b>：缩放、压缩、增大文件、锐化 / 黑白 / 亮度均匀<br>
+                        · <b>外观设置</b>：亮/暗/跟随系统主题 + 主体色
+                    </div>
+                </div>`;
+        };
+
+        const renderErrors = () => {
+            const sc = window.__dgutSelfCheckResults || [];
+            const scRows = sc.length ? sc.map(r => `
+                <div class="dgut-err-row">
+                    <span class="dgut-err-code" style="color:${r.ok ? 'var(--dgut-success)' : 'var(--dgut-error)'};">${r.ok ? '✓' : 'E' + r.errDef.code}</span>
+                    <span style="flex:1;">${escapeHtml(r.name)}</span>
+                    <span style="flex:none;color:var(--dgut-on-surface-variant);">${r.ok ? '通过' : '未就绪'}</span>
+                </div>`).join('') : `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">自检尚未运行，请刷新页面。</div>`;
+
+            const tableHtml = ERR_GROUPS.map(group => `
+                <div style="margin-bottom:14px;">
+                    <div class="dgut-section-title" style="margin-bottom:6px;">${escapeHtml(group.module)} <span style="font-weight:400;color:var(--dgut-on-surface-variant);font-size:11px;">（${String(group.codes[0]).charAt(0)}xxx）</span></div>
+                    <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;overflow:hidden;">
+                        ${group.codes.map(c => {
+                            const it = ERR_BY_CODE[c];
+                            if (!it) return '';
+                            return `<div class="dgut-err-row">
+                                <span class="dgut-err-code">E${it.code}</span>
+                                <span style="flex:1;color:var(--dgut-on-surface);">${escapeHtml(it.msg)}</span>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>`).join('');
+
+            contentEl.innerHTML = `
+                <div class="dgut-hint">
+                    <b>编码规则</b>：四位数字 <code>M T N N</code><br>
+                    · <b>M（千位）</b> 模块：1=签到 2=刷课 3=互评 4=读书 5=文档 6=Word转PDF 7=图片 8=通用/框架<br>
+                    · <b>T（百位）</b> 类型：0=未知 1=请求 2=处理 3=认证 4=依赖缺失 5=参数 6=用户操作<br>
+                    · <b>NN（十/个位）</b> 具体编号
+                </div>
+                <div class="dgut-card">
+                    <div class="dgut-section-title">本次自检（同步阶段）</div>
+                    <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;overflow:hidden;">${scRows}</div>
+                    <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:8px;">异步阶段（Token 与 userid）会输出到控制台。可打开 F12 查看。</div>
+                </div>
+                <div class="dgut-card">
+                    <div class="dgut-section-title">错误代码列表</div>
+                    ${tableHtml}
+                </div>`;
+        };
+
+        const switchTab = (tab) => {
+            activeTab = tab;
+            GM_setValue(DETAIL_TAB_KEY, tab);
+            ac.querySelectorAll('.dgut-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+            if (tab === 'about') renderAbout();
+            else renderErrors();
+        };
+        ac.querySelectorAll('.dgut-tab-btn').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+        switchTab(activeTab);
     }
 
+    /* ============================================================
+     * 面板与悬浮按钮
+     * ============================================================ */
     function createPanel() {
         if (document.getElementById('dgut-main-panel')) return;
         const pos = GM_getValue(UI_POS_KEY, null);
@@ -3817,6 +3975,7 @@ ${signaturesHtml(signatures)}
                     <button class="dgut-nav" data-action="wordpdf">${icons.doc} Word 转 PDF</button>
                     <button class="dgut-nav" data-action="imagetool">${icons.upload} 照片处理</button>
                     <button class="dgut-nav" data-action="appearance">${icons.theme} 外观设置</button>
+                    <button class="dgut-nav" data-action="detail">${icons.info} 详情</button>
                     <div style="flex:1;"></div>
                     <div id="dgut-panel-footer-version">${ABOUT_VERSION}</div>
                 </div>
@@ -3926,10 +4085,7 @@ ${signaturesHtml(signatures)}
             if (!mini) createMiniPanel();
             return;
         }
-        if (!existing) {
-            GM_setValue(PANEL_OPEN_KEY, true);
-            createPanel();
-        }
+        if (!existing) { GM_setValue(PANEL_OPEN_KEY, true); createPanel(); }
     }
 
     function resetPanelPositions() {
@@ -3954,6 +4110,7 @@ ${signaturesHtml(signatures)}
         GM_registerMenuCommand('Word 转 PDF', () => openActionView('wordpdf'));
         GM_registerMenuCommand('照片处理工具', () => openActionView('imagetool'));
         GM_registerMenuCommand('外观设置（主题/主体色）', () => openActionView('appearance'));
+        GM_registerMenuCommand('详情（简介与错误码）', () => openActionView('detail'));
 
         createMiniPanel();
         if (GM_getValue(PANEL_OPEN_KEY, false)) createPanel();
