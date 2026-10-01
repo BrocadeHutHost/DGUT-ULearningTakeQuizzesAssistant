@@ -11,7 +11,8 @@
 > 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
 > <img width="767" height="452" alt="image" src="https://github.com/user-attachments/assets/9bdf12f3-feee-44d8-91a2-8d7b25f18fd8" />
 > - md转文段与签名效果
-> <img width="604" height="1345" alt="image" src="https://github.com/user-attachments/assets/e61436b1-d5fe-41ea-be44-002a350b3fdf" />
+> <img width="603" height="1048" alt="image" src="https://github.com/user-attachments/assets/7d300a11-77c0-4de1-a655-a602dd759976" />
+
 
 ---
 
