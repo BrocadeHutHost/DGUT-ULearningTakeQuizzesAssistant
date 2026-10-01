@@ -4,6 +4,7 @@
 > 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />
 ，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />
 ，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />
+，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
 <img width="760" height="501" alt="image" src="https://github.com/user-attachments/assets/30b5cf93-2446-49e3-9118-f06297b0ed19" />
 md转文段与签名效果
 <img width="567" height="275" alt="image" src="https://github.com/user-attachments/assets/1fa1377a-8d13-435b-a77c-4ea2b070a6f0" />
