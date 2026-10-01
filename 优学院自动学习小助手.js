@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.1.1
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF + 手绘电子签名。主题变量统一挂 :root，暗色模式底色真正生效。
+// @version      5.2.0
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置(主题/主体色) + Markdown 转 Word/PDF(直出下载) + Word 转 PDF(直出下载) + 图片工具(压缩/增大/高质量平滑处理) + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -17,6 +17,9 @@
 // @grant        unsafeWindow
 // @require      https://cdn.jsdelivr.net/npm/marked/marked.min.js
 // @require      https://code.jquery.com/jquery-1.12.4.min.js
+// @require      https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js
+// @require      https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js
+// @require      https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js
 // @connect      lms.dgut.edu.cn
 // @connect      application.dgut.edu.cn
 // @connect      courseapi.ulearning.cn
@@ -50,6 +53,7 @@
     const DOC_DRAFT_KEY = 'dgut_doc_md_draft';
     const DOC_TITLE_KEY = 'dgut_doc_md_title';
     const DOC_SIGN_KEY  = 'dgut_doc_signatures';
+    const IMG_CFG_KEY   = 'dgut_image_tool_config';
     const DEBUG = true;
 
     if (window.top !== window.self) {
@@ -111,7 +115,7 @@
     if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
     /* ============================================================
-     * 主题系统（v5.1.1：变量统一挂 :root，面板不再重复定义）
+     * 主题系统
      * ============================================================ */
 
     const ACCENTS = {
@@ -203,7 +207,7 @@
             onPrimary: '#FFFFFF'
         };
         const darkBase = {
-            surface: '#141218',      // 主基调：深黑
+            surface: '#141218',
             surface2: '#1F1D24',
             surface3: '#2B2930',
             onSurface: '#E6E0E9',
@@ -243,10 +247,6 @@
         });
     }
 
-    /**
-     * 把 token 写到 :root（即 <html>），所有面板/悬浮球/Toast 都从这里继承。
-     * 面板自身不再重复定义任何 --dgut-* 变量，避免选择器优先级覆盖主题。
-     */
     function applyTheme() {
         const dark = resolvedThemeMode() === 'dark';
         const t = themeTokens();
@@ -378,13 +378,12 @@
         sign2: `<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>`
     };
 
-    /* ---------- 全局静态样式：不再重复定义 --dgut-* 变量！ ---------- */
+    /* ---------- 全局静态样式 ---------- */
     GM_addStyle(`
         @keyframes dgutPulse {0%,100%{filter:brightness(1)}50%{filter:brightness(1.15)}}
         @keyframes dgutDown {from{transform:translate(-50%,-120%);opacity:0}to{transform:translate(-50%,0);opacity:1}}
         @keyframes dgutShrinkX {from{transform:scaleX(1)}to{transform:scaleX(0)}}
 
-        /* ---------- 通用组件 ---------- */
         .dgut-card {
             background: var(--dgut-surface-3);
             border: 1px solid var(--dgut-outline-variant);
@@ -453,6 +452,7 @@
             transition: border-color .15s, background .15s;
         }
         .dgut-input:focus, .dgut-textarea:focus, .dgut-select:focus { border-color: var(--dgut-primary); }
+        .dgut-input:disabled { opacity: .55; cursor: not-allowed; }
         .dgut-input::placeholder, .dgut-textarea::placeholder { color: var(--dgut-outline); }
 
         .dgut-log {
@@ -472,7 +472,6 @@
         .dgut-log-line.log-muted { color: var(--dgut-on-surface-variant); }
         .dgut-log-line.log-info { color: var(--dgut-on-surface); }
 
-        /* ---------- 按钮 ---------- */
         .dgut-btn {
             display: inline-flex; align-items: center; justify-content: center; gap: 5px;
             padding: 7px 13px; border: none; border-radius: 999px;
@@ -482,11 +481,11 @@
             font-family: inherit;
         }
         .dgut-btn:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
+        .dgut-btn:disabled { opacity: .6; cursor: progress; }
         .dgut-btn-primary { background: var(--dgut-primary); color: var(--dgut-on-primary); }
         .dgut-btn-primary:hover { background: var(--dgut-primary-hover); color: var(--dgut-on-primary); }
         .dgut-btn svg, .dgut-ico svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
 
-        /* ---------- 导航 ---------- */
         .dgut-nav {
             display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
             padding: 9px 10px; border: none; border-radius: 10px; background: transparent;
@@ -503,7 +502,6 @@
             letter-spacing: .6px; padding: 12px 10px 4px; user-select: none;
         }
 
-        /* ---------- 状态条 ---------- */
         #dgut-status-bar {
             padding: 6px 12px; font-size: 11px;
             border-top: 1px solid var(--dgut-outline-variant);
@@ -515,7 +513,6 @@
             background: var(--dgut-error-container);
         }
 
-        /* ---------- 签到课程列表 ---------- */
         #dgut-sign-courses, .dgut-list-box {
             max-height: 200px;
             overflow-y: auto;
@@ -545,7 +542,6 @@
         }
         .dgut-sign-course.active .course-meta { color: var(--dgut-on-primary-container); opacity: .8; }
 
-        /* ---------- 互评卡片 ---------- */
         .dgut-peer-card {
             border-radius: 12px;
             padding: 10px 14px;
@@ -577,7 +573,6 @@
             display: flex; justify-content: space-between;
         }
 
-        /* ---------- Toast ---------- */
         #dgut-toast-card {
             position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
             z-index: 2147483645;
@@ -603,7 +598,6 @@
             animation: dgutShrinkX linear forwards;
         }
 
-        /* ---------- 签名列表 ---------- */
         .dgut-sig-card {
             border: 1px solid var(--dgut-outline-variant);
             border-radius: 10px;
@@ -627,7 +621,7 @@
             font-weight: 700; font-size: 14px; line-height: 1;
         }
 
-        /* ---------- 文档预览 ---------- */
+        /* ---------- Markdown 预览框 ---------- */
         #dgut-doc-preview-box {
             margin-top: 10px; padding: 12px 14px;
             background: var(--dgut-surface-2);
@@ -637,13 +631,60 @@
             max-height: 340px; overflow: auto;
             color: var(--dgut-on-surface);
         }
+        #dgut-doc-preview-box h1,
+        #dgut-doc-preview-box h2,
+        #dgut-doc-preview-box h3,
+        #dgut-doc-preview-box h4,
+        #dgut-doc-preview-box h5,
+        #dgut-doc-preview-box h6 {
+            margin: 12px 0 8px;
+            color: var(--dgut-on-surface);
+            line-height: 1.3;
+            font-weight: 700;
+        }
+        #dgut-doc-preview-box h1 { font-size: 20px; border-bottom: 1px solid var(--dgut-outline-variant); padding-bottom: 6px; }
+        #dgut-doc-preview-box h2 { font-size: 17px; }
+        #dgut-doc-preview-box h3 { font-size: 15px; }
+        #dgut-doc-preview-box h4 { font-size: 14px; }
+        #dgut-doc-preview-box p { margin: 6px 0; }
+        #dgut-doc-preview-box ul,
+        #dgut-doc-preview-box ol { padding-left: 24px; margin: 6px 0; }
+        #dgut-doc-preview-box li { margin: 2px 0; }
+        #dgut-doc-preview-box blockquote {
+            border-left: 4px solid var(--dgut-primary);
+            background: var(--dgut-surface-3);
+            color: var(--dgut-on-surface-variant);
+            padding: 6px 14px;
+            margin: 10px 0;
+            border-radius: 0 6px 6px 0;
+        }
+        #dgut-doc-preview-box blockquote p { margin: 4px 0; }
         #dgut-doc-preview-box pre,
         #dgut-doc-preview-box code {
             background: var(--dgut-hover-overlay);
             padding: 2px 6px; border-radius: 4px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+        }
+        #dgut-doc-preview-box pre { padding: 10px 12px; overflow-x: auto; border-radius: 6px; }
+        #dgut-doc-preview-box pre code { background: transparent; padding: 0; }
+        #dgut-doc-preview-box table {
+            border-collapse: collapse; margin: 8px 0;
+            border: 1px solid var(--dgut-outline-variant);
+        }
+        #dgut-doc-preview-box th,
+        #dgut-doc-preview-box td {
+            border: 1px solid var(--dgut-outline-variant);
+            padding: 5px 10px;
+        }
+        #dgut-doc-preview-box th { background: var(--dgut-secondary-container); }
+        #dgut-doc-preview-box a { color: var(--dgut-primary); text-decoration: underline; }
+        #dgut-doc-preview-box img { max-width: 100%; height: auto; border-radius: 6px; }
+        #dgut-doc-preview-box hr {
+            border: none; border-top: 1px solid var(--dgut-outline-variant);
+            margin: 12px 0;
         }
 
-        /* ---------- 画板 ---------- */
         #dgut-sig-canvas {
             width: 100%; height: 180px;
             background: var(--dgut-surface-3);
@@ -653,7 +694,6 @@
             box-sizing: border-box;
         }
 
-        /* ---------- 迷你悬浮面板 ---------- */
         #dgut-mini-panel {
             position: fixed;
             z-index: 2147483001;
@@ -674,7 +714,6 @@
             transform: scale(1.06);
         }
 
-        /* ---------- 主面板框架 ---------- */
         #dgut-main-panel {
             position: fixed; z-index: 2147483000;
             width: 780px; max-width: 98vw;
@@ -2296,12 +2335,16 @@
         catch (e) { throw new Error('Markdown 渲染失败：' + e.message); }
     }
 
-    function wrapForWord(html, title, signatures = []) {
-        const sigImgs = signatures.map(s => `
-            <div style="margin-top:14pt;text-align:right;font-size:10pt;color:#49454E;">
+    function signaturesHtml(signatures) {
+        if (!signatures || !signatures.length) return '';
+        return signatures.map(s => `
+            <div style="margin-top:20px;text-align:right;font-size:14px;color:#49454E;">
                 <div>${escapeHtml(s.name || '签名')}</div>
                 <img src="${s.dataUrl}" style="width:180px;height:auto;vertical-align:bottom;">
             </div>`).join('');
+    }
+
+    function wrapForWord(html, title, signatures = []) {
         return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
@@ -2331,9 +2374,167 @@
 </head>
 <body>
 ${html}
-${sigImgs}
+${signaturesHtml(signatures)}
 </body>
 </html>`;
+    }
+
+    /* ============================================================
+     * PDF 直出（html2canvas + jsPDF）
+     * ============================================================ */
+
+    const PDF_MARGIN_MM = 14;
+    const PDF_PAGE_W_MM = 210;
+    const PDF_PAGE_H_MM = 297;
+    const PDF_RENDER_W = 780;
+
+    const PDF_INLINE_STYLE = `
+        * { box-sizing: border-box; }
+        h1 { font-size: 26px; border-bottom: 1px solid #CAC4D0; padding-bottom: 6px; margin: 18px 0 10px; }
+        h2 { font-size: 21px; margin: 16px 0 8px; }
+        h3 { font-size: 18px; margin: 14px 0 6px; }
+        h4 { font-size: 16px; margin: 12px 0 6px; }
+        h5, h6 { font-size: 15px; margin: 10px 0 6px; }
+        p { margin: 8px 0; }
+        ul, ol { margin: 8px 0; padding-left: 26px; }
+        li { margin: 3px 0; }
+        blockquote { border-left: 4px solid #6750A4; margin: 10px 0; padding: 4px 14px; color: #49454E; background: #F7F2FA; }
+        pre { background: #F7F2FA; padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+        code { background: #F3EDF7; padding: 1px 5px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; font-size: 14px; }
+        pre code { background: transparent; padding: 0; }
+        table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+        th, td { border: 1px solid #CAC4D0; padding: 6px 10px; font-size: 15px; word-break: break-word; }
+        th { background: #F3EDF7; }
+        img { max-width: 100%; height: auto; }
+        hr { border: none; border-top: 1px solid #CAC4D0; margin: 16px 0; }
+        a { color: #6750A4; text-decoration: underline; }
+    `;
+
+    function pdfLibReady() {
+        const hasH2C = (typeof html2canvas !== 'undefined');
+        const hasJsPDF = !!(window.jspdf && window.jspdf.jsPDF) || !!window.jsPDF;
+        return { hasH2C, hasJsPDF };
+    }
+
+    /**
+     * 将一段 HTML 渲染为 PDF Blob（A4，可多页）
+     */
+    async function htmlToPdfBlob(innerHtml, title) {
+        const lib = pdfLibReady();
+        if (!lib.hasH2C) throw new Error('html2canvas 未加载（检查网络或脚本管理器 @require）');
+        if (!lib.hasJsPDF) throw new Error('jsPDF 未加载（检查网络或脚本管理器 @require）');
+        const PDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+
+        const contentW = PDF_PAGE_W_MM - PDF_MARGIN_MM * 2;
+        const contentH = PDF_PAGE_H_MM - PDF_MARGIN_MM * 2;
+
+        const holder = document.createElement('div');
+        holder.setAttribute('data-dgut-pdf-holder', '1');
+        holder.style.cssText = [
+            'position:absolute',
+            'left:-100000px',
+            'top:0',
+            `width:${PDF_RENDER_W}px`,
+            'margin:0',
+            'padding:0',
+            'background:#ffffff',
+            'color:#1D1B20',
+            'font-family:"PingFang SC","Microsoft YaHei",SimSun,sans-serif',
+            'font-size:16px',
+            'line-height:1.7',
+            'box-sizing:border-box',
+            'pointer-events:none'
+        ].join(';');
+        holder.innerHTML = `<style>${PDF_INLINE_STYLE}</style>${innerHtml}`;
+        document.body.appendChild(holder);
+
+        try {
+            try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+            // 等图片解码
+            const imgs = Array.from(holder.querySelectorAll('img'));
+            await Promise.all(imgs.map(im => (im.complete ? Promise.resolve() : new Promise(r => {
+                im.addEventListener('load', r, { once: true });
+                im.addEventListener('error', r, { once: true });
+                setTimeout(r, 2000);
+            }))));
+            await new Promise(r => setTimeout(r, 80));
+
+            const canvas = await html2canvas(holder, {
+                scale: 2,
+                backgroundColor: '#ffffff',
+                useCORS: true,
+                allowTaint: false,
+                logging: false,
+                width: holder.scrollWidth,
+                height: holder.scrollHeight,
+                windowWidth: PDF_RENDER_W,
+                windowHeight: Math.max(holder.scrollHeight, 800)
+            });
+
+            const pxPerMm = canvas.width / contentW;
+            const pageSlicePx = Math.max(1, Math.floor(contentH * pxPerMm));
+
+            const pdf = new PDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+            try { pdf.setProperties({ title: title || 'document', creator: 'DGUT Helper' }); } catch (e) {}
+
+            let y = 0, pageIdx = 0;
+            while (y < canvas.height) {
+                const sliceH = Math.min(pageSlicePx, canvas.height - y);
+                if (sliceH <= 0) break;
+
+                const slice = document.createElement('canvas');
+                slice.width = canvas.width;
+                slice.height = sliceH;
+                const sctx = slice.getContext('2d');
+                sctx.fillStyle = '#ffffff';
+                sctx.fillRect(0, 0, slice.width, slice.height);
+                sctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+
+                const dataUrl = slice.toDataURL('image/jpeg', 0.94);
+                if (pageIdx > 0) pdf.addPage();
+                pdf.addImage(dataUrl, 'JPEG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentW, sliceH / pxPerMm);
+
+                y += sliceH;
+                pageIdx++;
+                if (pageIdx > 500) break; // 安全阀
+            }
+
+            return pdf.output('blob');
+        } finally {
+            holder.remove();
+        }
+    }
+
+    // 统一打印窗口：优先用 Blob URL 打开新标签，避免样式丢失 / 弹窗失效
+    function openPrintWindow(html, title) {
+        let win = null;
+        try {
+            const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            win = window.open(url, '_blank');
+            if (win) {
+                setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
+                const doPrint = () => { try { win.focus(); win.print(); } catch (e) {} };
+                try {
+                    win.addEventListener('load', () => setTimeout(doPrint, 400), { once: true });
+                } catch (e) {
+                    setTimeout(doPrint, 900);
+                }
+                setTimeout(doPrint, 1400);
+                return win;
+            }
+        } catch (e) {}
+        try {
+            win = window.open('', '_blank');
+            if (!win) return null;
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
+            setTimeout(() => { try { win.focus(); win.print(); } catch (e) {} }, 700);
+            return win;
+        } catch (e) {
+            return null;
+        }
     }
 
     function exportMdToWord() {
@@ -2355,7 +2556,35 @@ ${sigImgs}
         showStatus(`已导出 Word：${title}.doc（含 ${sigs.length} 个签名）`);
     }
 
-    function exportMdToPdf() {
+    async function exportMdToPdf(btn) {
+        const md = document.getElementById('dgut-doc-md')?.value || '';
+        if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
+        const title = (document.getElementById('dgut-doc-title')?.value || getDocTitle()).trim() || `文档_${dateKey()}`;
+        saveDocDraft(md); saveDocTitle(title);
+        const sigs = getPickedSignatures();
+
+        let html;
+        try { html = mdToHtml(md); }
+        catch (e) { showStatus(e.message, true); return; }
+
+        const inner = html + signaturesHtml(sigs);
+        const oldText = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+        startStatusTicker('正在生成 PDF');
+        try {
+            const blob = await htmlToPdfBlob(inner, title);
+            stopStatusTicker();
+            imgDownloadBlob(blob, `${title}.pdf`);
+            showStatus(`已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）`);
+        } catch (e) {
+            stopStatusTicker();
+            showStatus('PDF 生成失败：' + e.message, true);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = oldText; }
+        }
+    }
+
+    function exportMdToPrintView() {
         const md = document.getElementById('dgut-doc-md')?.value || '';
         if (!md.trim()) { showStatus('请先输入 Markdown 内容', true); return; }
         const title = (document.getElementById('dgut-doc-title')?.value || getDocTitle()).trim() || `文档_${dateKey()}`;
@@ -2365,13 +2594,9 @@ ${sigImgs}
         try { html = mdToHtml(md); }
         catch (e) { showStatus(e.message, true); return; }
         const fullHtml = wrapForWord(html, title, sigs);
-        const win = window.open('', '_blank');
+        const win = openPrintWindow(fullHtml, title);
         if (!win) { showStatus('弹窗被拦截：请允许本站弹窗后重试', true); return; }
-        win.document.open();
-        win.document.write(fullHtml);
-        win.document.close();
-        setTimeout(() => { try { win.focus(); win.print(); } catch (e) {} }, 600);
-        showStatus('已打开打印视图：在打印对话框中选择"另存为 PDF"');
+        showStatus('已打开打印视图：可在打印对话框中选择"另存为 PDF"');
     }
 
     function createSignaturePad(canvas) {
@@ -2473,15 +2698,16 @@ ${sigImgs}
     function renderDocToolView(ac) {
         const draft = getDocDraft();
         const title = getDocTitle();
-        ac.innerHTML = actionHeader(ACTION_TITLES.doc, 'Markdown 转 Word / PDF + 手绘电子签名') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.doc, 'Markdown 转 Word / PDF（PDF 直出下载）+ 手绘电子签名') + `
             <div class="dgut-card">
-                <div class="dgut-section-title"> Markdown 内容</div>
+                <div class="dgut-section-title">Markdown 内容</div>
                 <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…&#10;支持标准语法：# 标题、**粗体**、*斜体*、- 列表、\`代码\`、\`\`\`代码块\`\`\`、> 引用、| 表格 | 等。" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
                 <div class="dgut-row" style="margin-top:10px;">
                     <input id="dgut-doc-title" class="dgut-input" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;">
                     <button id="dgut-doc-preview" class="dgut-btn">${icons.list} 预览</button>
-                    <button id="dgut-doc-word" class="dgut-btn dgut-btn-primary">${icons.export} 导出 Word</button>
-                    <button id="dgut-doc-pdf" class="dgut-btn dgut-btn-primary">导出 PDF</button>
+                    <button id="dgut-doc-word" class="dgut-btn">${icons.export} 导出 Word</button>
+                    <button id="dgut-doc-pdf" class="dgut-btn dgut-btn-primary">${icons.export} 下载 PDF</button>
+                    <button id="dgut-doc-print" class="dgut-btn">打印 PDF</button>
                     <button id="dgut-doc-clear" class="dgut-btn">清空</button>
                 </div>
                 <div id="dgut-doc-preview-box" style="display:none;"></div>
@@ -2500,8 +2726,8 @@ ${sigImgs}
             </div>
             <div class="dgut-hint">
                 <b>导出说明</b>：<br>
-                · <b>Word</b>：生成 <code>.doc</code>（HTML 内容承载），Word / WPS 可直接打开与二次编辑；<br>
-                · <b>PDF</b>：打开打印视图，在打印对话框中选择"另存为 PDF"即可；<br>
+                · <b>下载 PDF</b>：生成需要几秒钟，请耐心等待<br>
+                · <b>打印 PDF</b>：打开打印视图，在打印对话框中选择"另存为 PDF"（文字为矢量，体积更小）；<br>
                 · 所有处理均在浏览器本地完成，内容不上传任何服务器。
             </div>`;
         const mdEl = ac.querySelector('#dgut-doc-md');
@@ -2520,7 +2746,8 @@ ${sigImgs}
             } catch (e) { showStatus(e.message, true); }
         };
         ac.querySelector('#dgut-doc-word').onclick = exportMdToWord;
-        ac.querySelector('#dgut-doc-pdf').onclick = exportMdToPdf;
+        ac.querySelector('#dgut-doc-pdf').onclick = (e) => exportMdToPdf(e.currentTarget);
+        ac.querySelector('#dgut-doc-print').onclick = exportMdToPrintView;
         ac.querySelector('#dgut-doc-clear').onclick = () => {
             if (!confirm('清空 Markdown 内容？此操作不可撤销。')) return;
             mdEl.value = '';
@@ -2541,6 +2768,904 @@ ${sigImgs}
         renderSignatureList();
     }
 
+    let gWpMammothPromise = null;
+    function wpLoadMammoth() {
+        if (typeof mammoth !== 'undefined') return Promise.resolve(mammoth);
+        if (typeof window.mammoth !== 'undefined') return Promise.resolve(window.mammoth);
+        if (gWpMammothPromise) return gWpMammothPromise;
+        gWpMammothPromise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js';
+            s.async = true;
+            s.onload = () => {
+                if (typeof window.mammoth !== 'undefined') resolve(window.mammoth);
+                else { gWpMammothPromise = null; reject(new Error('mammoth 加载后仍未就绪')); }
+            };
+            s.onerror = () => { gWpMammothPromise = null; reject(new Error('无法加载 mammoth（网络或 CSP 限制）')); };
+            (document.head || document.documentElement).appendChild(s);
+        });
+        return gWpMammothPromise;
+    }
+
+    function wpBuildPrintHtml(innerHtml, title) {
+        return `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<!--[if gte mso 9]>
+<xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml>
+<![endif]-->
+<style>
+    @page { size: A4; margin: 2cm; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: "PingFang SC", "Microsoft YaHei", SimSun, sans-serif; font-size: 12pt; line-height: 1.7; color: #1D1B20; padding: 20px; }
+    h1 { font-size: 20pt; border-bottom: 1px solid #CAC4D0; padding-bottom: 4pt; }
+    h2 { font-size: 16pt; } h3 { font-size: 14pt; } h4 { font-size: 12pt; }
+    p { margin: 6pt 0; }
+    code { background: #F3EDF7; padding: 1pt 4pt; border-radius: 3pt; font-family: Consolas, "Courier New", monospace; font-size: 10.5pt; }
+    pre { background: #F7F2FA; padding: 10pt; border-radius: 6pt; overflow-x: auto; }
+    pre code { background: transparent; padding: 0; }
+    table { border-collapse: collapse; margin: 6pt 0; max-width: 100%; }
+    th, td { border: 1pt solid #CAC4D0; padding: 4pt 8pt; font-size: 11pt; }
+    th { background: #F3EDF7; }
+    blockquote { border-left: 3pt solid #6750A4; padding-left: 10pt; color: #49454E; margin-left: 0; }
+    ul, ol { margin: 6pt 0; padding-left: 20pt; }
+    img { max-width: 100%; height: auto; }
+    @media print { body { padding: 0; } }
+</style>
+</head>
+<body>${innerHtml}</body>
+</html>`;
+    }
+
+    async function wpParseDocxFile(file) {
+        const mammoth = await wpLoadMammoth();
+        const arrayBuffer = await file.arrayBuffer();
+        const options = {
+            styleMap: [
+                "p[style-name='Title'] => h1:fresh",
+                "p[style-name='Heading 1'] => h1:fresh",
+                "p[style-name='Heading 2'] => h2:fresh",
+                "p[style-name='Heading 3'] => h3:fresh",
+                "p[style-name='Heading 4'] => h4:fresh"
+            ],
+            convertImage: mammoth.images.imgElement(function (image) {
+                return image.read('base64').then(function (b64) {
+                    return { src: 'data:' + image.contentType + ';base64,' + b64 };
+                });
+            })
+        };
+        const result = await mammoth.convertToHtml({ arrayBuffer }, options);
+        return { html: result.value || '', messages: result.messages || [] };
+    }
+
+    function renderWordPdfView(ac) {
+        ac.innerHTML = actionHeader(ACTION_TITLES.wordpdf, '本地解析 .docx → 直接下载 PDF / 打印视图 / 导出 .doc') + `
+            <div class="dgut-hint">
+                <b>使用步骤</b><br>
+                1. 选择 <code>.docx</code> 文件（Word 2007 及以上格式）<br>
+                2. 点「下载 PDF」→ 本地生成 A4 PDF 并直接保存，<b>无需打印对话框</b><br>
+                3. 或点「打印 PDF」→ 新窗口按 <b>Ctrl/Cmd + P</b>，目标选「另存为 PDF」<br>
+                4. 或点「导出为 .doc」下载 Word 可直接编辑的文件<br>
+                <span style="color:var(--dgut-warn);">仅支持 <code>.docx</code>；旧版 <code>.doc</code> 二进制格式请先用 Word 另存为 .docx。</span>
+            </div>
+            <div class="dgut-card">
+                <div class="dgut-row dgut-row--mb">
+                    <input type="file" id="dgut-wp-file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="dgut-input" style="flex:1;min-width:0;">
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <input id="dgut-wp-title" class="dgut-input" placeholder="文档标题（用于文件名）" value="${escapeHtml(getDocTitle())}" style="flex:1;min-width:0;">
+                </div>
+                <div class="dgut-row dgut-row--end">
+                    <button id="dgut-wp-pdf" class="dgut-btn dgut-btn-primary">${icons.export} 下载 PDF</button>
+                    <button id="dgut-wp-print" class="dgut-btn">打印 PDF</button>
+                    <button id="dgut-wp-word" class="dgut-btn">${icons.doc} 导出为 .doc</button>
+                </div>
+                <div id="dgut-wp-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-top:10px;line-height:1.7;"></div>
+            </div>
+            <div class="dgut-card dgut-card--tight">
+                <div class="dgut-section-title">内容预览</div>
+                <div id="dgut-wp-preview" style="max-height:340px;overflow:auto;padding:12px;background:var(--dgut-surface-3);border:1px solid var(--dgut-outline-variant);border-radius:10px;color:var(--dgut-on-surface);font-size:13px;line-height:1.7;">
+                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">选择文件后点击上方按钮进行转换…</span>
+                </div>
+            </div>`;
+
+        const fileEl = ac.querySelector('#dgut-wp-file');
+        const titleEl = ac.querySelector('#dgut-wp-title');
+        const statusEl = ac.querySelector('#dgut-wp-status');
+        const previewEl = ac.querySelector('#dgut-wp-preview');
+
+        const setStatus = (msg, isErr) => {
+            statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`;
+        };
+        const resolveTitle = (file) => (titleEl.value || '').trim() || file.name.replace(/\.docx$/i, '') || `Word文档_${dateKey()}`;
+
+        ac.querySelector('#dgut-wp-pdf').onclick = async (e) => {
+            const btn = e.currentTarget;
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            const oldText = btn.textContent;
+            btn.disabled = true; btn.textContent = '生成中…';
+            setStatus('正在解析文档…');
+            try {
+                const { html, messages } = await wpParseDocxFile(file);
+                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                previewEl.innerHTML = html;
+                const title = resolveTitle(file);
+                saveDocTitle(title);
+                setStatus('正在生成 PDF（大文档可能需要十几秒）…');
+                const blob = await htmlToPdfBlob(html, title);
+                imgDownloadBlob(blob, `${title}.pdf`);
+                const warns = (messages || []).filter(m => m.type === 'warning').length;
+                setStatus(`✓ 已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）${warns ? `，${warns} 条兼容性警告` : ''}`);
+            } catch (err) {
+                setStatus('转换失败：' + err.message, true);
+            } finally {
+                btn.disabled = false; btn.textContent = oldText;
+            }
+        };
+
+        ac.querySelector('#dgut-wp-print').onclick = async () => {
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            setStatus('正在解析…');
+            try {
+                const { html, messages } = await wpParseDocxFile(file);
+                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                previewEl.innerHTML = html;
+                const title = resolveTitle(file);
+                saveDocTitle(title);
+                const win = openPrintWindow(wpBuildPrintHtml(html, title), title);
+                if (!win) throw new Error('弹窗被拦截，请允许本站弹窗后重试');
+                const warns = (messages || []).filter(m => m.type === 'warning').length;
+                setStatus(`✓ 解析完成，已在打印视图中打开。${warns ? `（${warns} 条兼容性警告，可忽略）` : ''}`);
+            } catch (e) {
+                setStatus('转换失败：' + e.message, true);
+            }
+        };
+
+        ac.querySelector('#dgut-wp-word').onclick = async () => {
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) { setStatus('请先选择 .docx 文件', true); return; }
+            setStatus('正在解析…');
+            try {
+                const { html } = await wpParseDocxFile(file);
+                if (!html.trim()) throw new Error('文档内容为空或无法解析');
+                previewEl.innerHTML = html;
+                const title = resolveTitle(file);
+                saveDocTitle(title);
+                const full = wpBuildPrintHtml(html, title);
+                const blob = new Blob(['\uFEFF', full], { type: 'application/msword;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `${title}.doc`;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                setStatus(`✓ 已导出：${title}.doc`);
+            } catch (e) {
+                setStatus('导出失败：' + e.message, true);
+            }
+        };
+    }
+
+
+    /* ============================================================
+     * 图片工具
+     * ============================================================ */
+
+    const IMG_RATIO_PRESETS = [
+        { id: 'orig',   label: '原始比例',             w: 0,  h: 0 },
+        { id: '1:1',    label: '1 : 1（正方形）',       w: 1,  h: 1 },
+        { id: '4:3',    label: '4 : 3（传统屏）',       w: 4,  h: 3 },
+        { id: '3:4',    label: '3 : 4（竖版）',         w: 3,  h: 4 },
+        { id: '16:9',   label: '16 : 9（宽屏）',        w: 16, h: 9 },
+        { id: '9:16',   label: '9 : 16（竖屏）',        w: 9,  h: 16 },
+        { id: '3:2',    label: '3 : 2（单反）',         w: 3,  h: 2 },
+        { id: '2:3',    label: '2 : 3（竖版单反）',     w: 2,  h: 3 },
+        { id: '21:9',   label: '21 : 9（超宽）',        w: 21, h: 9 },
+        { id: 'custom', label: '自定义（手动填宽高）',  w: -1, h: -1 }
+    ];
+
+    let gImgState = null;
+
+    function imgFmtSize(bytes) {
+        if (bytes === undefined || bytes === null || isNaN(bytes)) return '--';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+    }
+
+    function imgFileToImage(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const img = new Image();
+                img.onload = () => resolve({ img, dataUrl: reader.result, file });
+                img.onerror = () => reject(new Error('图片解码失败'));
+                img.src = reader.result;
+            };
+            reader.onerror = () => reject(new Error('读取文件失败'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function imgCanvasToBlob(canvas, mime, quality) {
+        return new Promise((resolve, reject) => {
+            try {
+                canvas.toBlob((b) => {
+                    if (!b) return reject(new Error('导出失败（浏览器可能不支持该格式）'));
+                    if (mime === 'image/webp' && b.type !== 'image/webp') {
+                        return reject(new Error('当前浏览器不支持 WebP 编码，请改用 JPEG/PNG'));
+                    }
+                    resolve(b);
+                }, mime, typeof quality === 'number' ? quality : undefined);
+            } catch (e) { reject(e); }
+        });
+    }
+
+    function imgDownloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    function imgApplyConvolution(imageData, kernel, divisor = 1, offset = 0) {
+        const { width, height, data } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        const kh = kernel.length, kw = kernel[0].length;
+        const cy = Math.floor(kh / 2), cx = Math.floor(kw / 2);
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                let r = 0, g = 0, b = 0;
+                for (let ky = 0; ky < kh; ky++) {
+                    const py = Math.min(height - 1, Math.max(0, y + ky - cy));
+                    for (let kx = 0; kx < kw; kx++) {
+                        const px = Math.min(width - 1, Math.max(0, x + kx - cx));
+                        const idx = (py * width + px) * 4;
+                        const k = kernel[ky][kx];
+                        r += data[idx] * k;
+                        g += data[idx + 1] * k;
+                        b += data[idx + 2] * k;
+                    }
+                }
+                const i = (y * width + x) * 4;
+                out[i]     = r / divisor + offset;
+                out[i + 1] = g / divisor + offset;
+                out[i + 2] = b / divisor + offset;
+                out[i + 3] = data[i + 3];
+            }
+        }
+        return new ImageData(out, width, height);
+    }
+
+    function imgApplySharpen(imageData, amount = 1) {
+        const a = Math.max(0.05, Math.min(3, Number(amount) || 1));
+        const center = 1 + 4 * a;
+        const kernel = [
+            [0,      -a,       0],
+            [-a,     center,  -a],
+            [0,      -a,       0]
+        ];
+        return imgApplyConvolution(imageData, kernel, 1, 0);
+    }
+
+    function imgApplyBlackWhite(imageData, threshold = 128) {
+        const t = Math.max(0, Math.min(255, Number(threshold) || 128));
+        const { width, height, data } = imageData;
+        const out = new Uint8ClampedArray(data.length);
+        for (let i = 0; i < data.length; i += 4) {
+            const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            const v = lum >= t ? 255 : 0;
+            out[i] = out[i + 1] = out[i + 2] = v;
+            out[i + 3] = data[i + 3];
+        }
+        return new ImageData(out, width, height);
+    }
+
+    function imgApplyHistEqualize(imageData) {
+        const { width, height, data } = imageData;
+        const hist = new Uint32Array(256);
+        const lumArr = new Uint8ClampedArray(width * height);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+            lumArr[j] = lum;
+            hist[lum]++;
+        }
+        const cdf = new Uint32Array(256);
+        let acc = 0;
+        for (let i = 0; i < 256; i++) { acc += hist[i]; cdf[i] = acc; }
+        let cdfMin = 0;
+        for (let i = 0; i < 256; i++) { if (cdf[i] > 0) { cdfMin = cdf[i]; break; } }
+        const total = width * height;
+        const denom = Math.max(1, total - cdfMin);
+        const map = new Uint8ClampedArray(256);
+        for (let i = 0; i < 256; i++) map[i] = Math.round((cdf[i] - cdfMin) / denom * 255);
+        const out = new Uint8ClampedArray(data.length);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+            const lum = lumArr[j];
+            const newLum = map[lum];
+            const scale = lum > 0 ? Math.min(4, newLum / lum) : 1;
+            out[i]     = Math.min(255, Math.round(data[i] * scale));
+            out[i + 1] = Math.min(255, Math.round(data[i + 1] * scale));
+            out[i + 2] = Math.min(255, Math.round(data[i + 2] * scale));
+            out[i + 3] = data[i + 3];
+        }
+        return new ImageData(out, width, height);
+    }
+
+    /**
+     * 多步降采样：先逐次减半到接近目标尺寸，再最后一步插值到位。
+     * 相比一次 drawImage 直接缩到目标，能显著减少细节丢失 / 摩尔纹 / 硬边。
+     */
+    function imgProgressiveScale(src, targetW, targetH) {
+        targetW = Math.max(1, Math.round(targetW));
+        targetH = Math.max(1, Math.round(targetH));
+
+        let cur = src, cw = src.width, ch = src.height, guard = 0;
+        while (guard++ < 16 && (cw > targetW * 2 || ch > targetH * 2)) {
+            const nw = Math.max(targetW, Math.round(cw / 2));
+            const nh = Math.max(targetH, Math.round(ch / 2));
+            if (nw >= cw && nh >= ch) break;
+            const nc = document.createElement('canvas');
+            nc.width = nw; nc.height = nh;
+            const nx = nc.getContext('2d');
+            nx.imageSmoothingEnabled = true;
+            nx.imageSmoothingQuality = 'high';
+            nx.drawImage(cur, 0, 0, nw, nh);
+            cur = nc; cw = nw; ch = nh;
+        }
+        if (cw === targetW && ch === targetH) return cur;
+
+        const fc = document.createElement('canvas');
+        fc.width = targetW; fc.height = targetH;
+        const fx = fc.getContext('2d');
+        fx.imageSmoothingEnabled = true;
+        fx.imageSmoothingQuality = 'high';
+        fx.drawImage(cur, 0, 0, targetW, targetH);
+        return fc;
+    }
+
+    function imgComputeTargetSize(srcW, srcH, cfg) {
+        if (cfg.sizeMode === 'none') return { w: srcW, h: srcH };
+        if (cfg.sizeMode === 'percent') {
+            const p = Math.max(1, Math.min(1000, Number(cfg.percent) || 100)) / 100;
+            return { w: Math.max(1, Math.round(srcW * p)), h: Math.max(1, Math.round(srcH * p)) };
+        }
+        const preset = IMG_RATIO_PRESETS.find(p => p.id === cfg.ratioPreset) || IMG_RATIO_PRESETS[0];
+        let rw = srcW, rh = srcH;
+        if (preset.id !== 'orig' && preset.id !== 'custom' && preset.w > 0 && preset.h > 0) {
+            rw = preset.w; rh = preset.h;
+        }
+        const W = Math.round(Number(cfg.targetW) || 0);
+        const H = Math.round(Number(cfg.targetH) || 0);
+        if (W > 0 && H > 0) return { w: W, h: H };
+        if (W > 0) return { w: W, h: Math.max(1, Math.round(W * rh / rw)) };
+        if (H > 0) return { w: Math.max(1, Math.round(H * rw / rh)), h: H };
+        return { w: srcW, h: srcH };
+    }
+
+    /**
+     * 绘制缩放结果。
+     * @param {HTMLCanvasElement} srcCanvas 源
+     * @param {number} targetW 目标宽
+     * @param {number} targetH 目标高
+     * @param {'contain'|'cover'|'fill'} fit 适配方式
+     * @param {'high'|'browser'|'none'} smooth 平滑策略
+     */
+    function imgDrawResized(srcCanvas, targetW, targetH, fit, smooth) {
+        targetW = Math.max(1, Math.round(targetW));
+        targetH = Math.max(1, Math.round(targetH));
+        const sw = srcCanvas.width, sh = srcCanvas.height;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = (smooth !== 'none');
+        ctx.imageSmoothingQuality = 'high';
+
+        let dx, dy, dw, dh;
+        if (fit === 'fill') {
+            dx = 0; dy = 0; dw = targetW; dh = targetH;
+        } else {
+            const s = fit === 'contain'
+                ? Math.min(targetW / sw, targetH / sh)
+                : Math.max(targetW / sw, targetH / sh);
+            dw = sw * s; dh = sh * s;
+            dx = (targetW - dw) / 2;
+            dy = (targetH - dh) / 2;
+        }
+
+        // 需要明显缩小时，走多步降采样
+        const shrink = Math.min(dw / sw, dh / sh);
+        let drawSrc = srcCanvas, drawX = dx, drawY = dy, drawW = dw, drawH = dh;
+
+        if (smooth === 'high' && shrink < 0.5 && !(Math.abs(dw - sw) < 0.5 && Math.abs(dh - sh) < 0.5)) {
+            const scaled = imgProgressiveScale(srcCanvas, dw, dh);
+            drawSrc = scaled;
+            drawW = scaled.width;
+            drawH = scaled.height;
+            drawX = (targetW - drawW) / 2;
+            drawY = (targetH - drawH) / 2;
+        }
+
+        if (fit === 'cover') {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 0, targetW, targetH);
+            ctx.clip();
+            ctx.drawImage(drawSrc, drawX, drawY, drawW, drawH);
+            ctx.restore();
+        } else {
+            ctx.drawImage(drawSrc, drawX, drawY, drawW, drawH);
+        }
+        return canvas;
+    }
+
+    // 逐级降分辨率逼近目标大小
+    async function imgCompressByResize(canvas, targetBytes, mime, smooth) {
+        let cur = canvas;
+        let last = null;
+        for (let iter = 0; iter < 10; iter++) {
+            let blob;
+            try { blob = await imgCanvasToBlob(cur, mime, 0.72); }
+            catch (e) { break; }
+            if (blob.size <= targetBytes) return blob;
+            last = blob;
+            const nw = Math.max(1, Math.round(cur.width * 0.82));
+            const nh = Math.max(1, Math.round(cur.height * 0.82));
+            if (nw === cur.width && nh === cur.height) break;
+            const nc = document.createElement('canvas');
+            nc.width = nw; nc.height = nh;
+            const c = nc.getContext('2d');
+            c.imageSmoothingEnabled = smooth !== 'none';
+            c.imageSmoothingQuality = 'high';
+            c.drawImage(cur, 0, 0, nw, nh);
+            cur = nc;
+        }
+        return last;
+    }
+
+    /**
+     * 压缩到目标大小
+     * @returns {Promise<{blob: Blob|null, achieved: boolean}>}
+     */
+    async function imgCompressToTargetSize(canvas, targetBytes, mime, allowResize, smooth) {
+        if (mime === 'image/png') {
+            const first = await imgCanvasToBlob(canvas, mime, 1.0);
+            if (first.size <= targetBytes) return { blob: first, achieved: true };
+            if (!allowResize) return { blob: first, achieved: false };
+            const resized = await imgCompressByResize(canvas, targetBytes, mime, smooth);
+            return { blob: resized || first, achieved: !!(resized && resized.size <= targetBytes) };
+        }
+
+        const maxBlob = await imgCanvasToBlob(canvas, mime, 1.0);
+        if (maxBlob.size <= targetBytes) return { blob: maxBlob, achieved: true };
+
+        let lo = 0.01, hi = 1.0, best = null;
+        for (let i = 0; i < 12; i++) {
+            const mid = (lo + hi) / 2;
+            let blob;
+            try { blob = await imgCanvasToBlob(canvas, mime, mid); }
+            catch (e) { break; }
+            if (blob.size <= targetBytes) { best = blob; lo = mid; }
+            else { hi = mid; }
+        }
+        if (best) return { blob: best, achieved: true };
+
+        let minBlob;
+        try { minBlob = await imgCanvasToBlob(canvas, mime, 0.01); }
+        catch (e) { minBlob = null; }
+
+        if (!allowResize) {
+            return { blob: minBlob || maxBlob, achieved: false };
+        }
+        const resized = await imgCompressByResize(canvas, targetBytes, mime, smooth);
+        return { blob: resized || minBlob || maxBlob, achieved: !!(resized && resized.size <= targetBytes) };
+    }
+
+    // 增大：在文件末尾追加数据到指定大小
+    async function imgInflateToSize(blob, targetBytes, mode) {
+        if (blob.size >= targetBytes) return blob;
+        const buf = await blob.arrayBuffer();
+        const padLen = targetBytes - buf.byteLength;
+        if (padLen <= 0) return blob;
+        const combined = new Uint8Array(buf.byteLength + padLen);
+        combined.set(new Uint8Array(buf), 0);
+        if (mode === 'random') {
+            let seed = 0x13579BDF >>> 0;
+            for (let i = buf.byteLength; i < combined.length; i++) {
+                seed = (seed * 1664525 + 1013904223) >>> 0;
+                combined[i] = seed & 0xff;
+            }
+        }
+        return new Blob([combined], { type: blob.type });
+    }
+
+    function imgLoadCfg() {
+        const d = {
+            sizeMode: 'none', percent: 100, targetW: 0, targetH: 0,
+            ratioPreset: 'orig', fit: 'contain',
+            format: 'keep', quality: 92,
+            targetSizeKB: 0, allowResize: false,
+            inflateKB: 0, inflateMode: 'random',
+            sharpen: false, sharpenAmount: 1,
+            bw: false, bwThreshold: 128,
+            eq: false,
+            smooth: 'high'
+        };
+        return Object.assign(d, GM_getValue(IMG_CFG_KEY, {}) || {});
+    }
+    function imgSaveCfg(cfg) { GM_setValue(IMG_CFG_KEY, Object.assign(imgLoadCfg(), cfg)); }
+
+    function imgReadCfg(ac) {
+        const q = (sel) => ac.querySelector(sel);
+        const num = (sel, dft) => { const v = Number(q(sel)?.value); return isNaN(v) ? dft : v; };
+        return {
+            sizeMode: q('#dgut-img-sizemode')?.value || 'none',
+            percent: num('#dgut-img-percent', 100),
+            targetW: num('#dgut-img-w', 0),
+            targetH: num('#dgut-img-h', 0),
+            ratioPreset: q('#dgut-img-ratio')?.value || 'orig',
+            fit: q('#dgut-img-fit')?.value || 'contain',
+            format: q('#dgut-img-format')?.value || 'keep',
+            quality: num('#dgut-img-quality', 92) / 100,
+            targetSizeKB: num('#dgut-img-target', 0),
+            allowResize: !!q('#dgut-img-allow-resize')?.checked,
+            inflateKB: num('#dgut-img-inflate', 0),
+            inflateMode: q('#dgut-img-inflate-mode')?.value || 'random',
+            sharpen: !!q('#dgut-img-sharpen')?.checked,
+            sharpenAmount: num('#dgut-img-sharpen-amt', 1),
+            bw: !!q('#dgut-img-bw')?.checked,
+            bwThreshold: num('#dgut-img-bw-thresh', 128),
+            eq: !!q('#dgut-img-eq')?.checked,
+            smooth: q('#dgut-img-smooth')?.value || 'high'
+        };
+    }
+
+    async function imgRunPipeline(ac) {
+        const st = gImgState;
+        if (!st || !st.img) throw new Error('请先选择一张图片');
+        const cfg = imgReadCfg(ac);
+
+        // 1) 源画布
+        let canvas = document.createElement('canvas');
+        canvas.width = st.img.naturalWidth;
+        canvas.height = st.img.naturalHeight;
+        let ctx = canvas.getContext('2d');
+        ctx.drawImage(st.img, 0, 0);
+
+        // 2) 滤镜处理
+        if (cfg.sharpen || cfg.bw || cfg.eq) {
+            let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            if (cfg.sharpen) imgData = imgApplySharpen(imgData, cfg.sharpenAmount);
+            if (cfg.bw) imgData = imgApplyBlackWhite(imgData, cfg.bwThreshold);
+            if (cfg.eq) imgData = imgApplyHistEqualize(imgData);
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        // 3) 缩放
+        const tgt = imgComputeTargetSize(canvas.width, canvas.height, cfg);
+        if (tgt.w !== canvas.width || tgt.h !== canvas.height) {
+            canvas = imgDrawResized(canvas, tgt.w, tgt.h, cfg.fit, cfg.smooth);
+        }
+
+        // 4) 编码
+        let mime;
+        switch (cfg.format) {
+            case 'jpeg': mime = 'image/jpeg'; break;
+            case 'webp': mime = 'image/webp'; break;
+            case 'png':  mime = 'image/png';  break;
+            default:
+                mime = (st.file && st.file.type) || 'image/png';
+                if (mime === 'image/jpg') mime = 'image/jpeg';
+        }
+
+        let blob, achieved = true, targetBytes = 0;
+        if (cfg.targetSizeKB > 0) {
+            targetBytes = cfg.targetSizeKB * 1024;
+            const r = await imgCompressToTargetSize(canvas, targetBytes, mime, cfg.allowResize, cfg.smooth);
+            blob = r.blob;
+            achieved = r.achieved;
+        } else {
+            blob = await imgCanvasToBlob(canvas, mime, cfg.quality);
+        }
+        if (!blob) throw new Error('编码失败');
+
+        // 5) 增大
+        let inflated = false;
+        if (cfg.inflateKB > 0 && blob.size < cfg.inflateKB * 1024) {
+            blob = await imgInflateToSize(blob, cfg.inflateKB * 1024, cfg.inflateMode);
+            inflated = true;
+        }
+
+        return { canvas, blob, mime, inflated, achieved, targetBytes, cfg };
+    }
+
+    function imgExtFromMime(mime) {
+        if (mime === 'image/jpeg') return 'jpg';
+        if (mime === 'image/webp') return 'webp';
+        if (mime === 'image/png') return 'png';
+        if (mime === 'image/gif') return 'gif';
+        return 'png';
+    }
+
+    function renderImageToolView(ac) {
+        const saved = imgLoadCfg();
+        const ratioOpts = IMG_RATIO_PRESETS.map(p => `<option value="${p.id}" ${p.id === saved.ratioPreset ? 'selected' : ''}>${p.label}</option>`).join('');
+        const opt = (v, cur) => v === cur ? ' selected' : '';
+        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 黑白 / 亮度均匀') + `
+            <div class="dgut-hint">
+                <b>说明</b><br>
+                · 所有处理均在浏览器本地完成，图片不上传服务器。<br>
+                · <b>平滑</b>除极限情况下建议保持「高质量」<br>
+                · 压缩：填了「目标大小」时，脚本自动调节质量逼近该大小；未填时，使用「输出质量」。<br>
+                · 目标大小过小时，默认不降低分辨率；勾选「允许降低分辨率」可进一步压缩。<br>
+                · 增大：将图片增大到指定大小，注意不是超分。
+            </div>
+
+            <div class="dgut-card">
+                <div class="dgut-row dgut-row--mb">
+                    <input type="file" id="dgut-img-file" accept="image/*" class="dgut-input" style="flex:1;min-width:0;">
+                    <button id="dgut-img-reset" class="dgut-btn" style="flex:none;">重置</button>
+                </div>
+                <div id="dgut-img-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;line-height:1.7;">
+                    尚未选择图片。
+                </div>
+                <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;padding:10px;text-align:center;">
+                    <canvas id="dgut-img-preview" style="max-width:100%;max-height:300px;border-radius:6px;background:
+                        repeating-conic-gradient(var(--dgut-surface-3) 0% 25%, var(--dgut-surface-2) 0% 50%) 50% / 16px 16px;"></canvas>
+                </div>
+            </div>
+
+            <div class="dgut-card">
+                <div class="dgut-section-title">缩放</div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">模式
+                        <select id="dgut-img-sizemode" class="dgut-select" style="padding:5px 8px;">
+                            <option value="none"${opt('none', saved.sizeMode)}>不缩放</option>
+                            <option value="percent"${opt('percent', saved.sizeMode)}>按百分比</option>
+                            <option value="dimensions"${opt('dimensions', saved.sizeMode)}>按像素尺寸</option>
+                        </select>
+                    </label>
+                    <label class="dgut-label" data-when="percent">百分比
+                        <input type="number" id="dgut-img-percent" class="dgut-input" value="${saved.percent}" min="1" max="1000" style="width:70px;padding:4px 6px;"> %
+                    </label>
+                    <label class="dgut-label" data-when="dimensions">宽
+                        <input type="number" id="dgut-img-w" class="dgut-input" placeholder="px" min="1" style="width:80px;padding:4px 6px;"> px
+                    </label>
+                    <label class="dgut-label" data-when="dimensions">高
+                        <input type="number" id="dgut-img-h" class="dgut-input" placeholder="px" min="1" style="width:80px;padding:4px 6px;"> px
+                    </label>
+                    <label class="dgut-label" data-when="dimensions">比例
+                        <select id="dgut-img-ratio" class="dgut-select" style="padding:5px 8px;">${ratioOpts}</select>
+                    </label>
+                    <label class="dgut-label" data-when="dimensions">适配
+                        <select id="dgut-img-fit" class="dgut-select" style="padding:5px 8px;">
+                            <option value="contain"${opt('contain', saved.fit)}>包含（完整显示，留边）</option>
+                            <option value="cover"${opt('cover', saved.fit)}>覆盖（铺满，裁剪边缘）</option>
+                            <option value="fill"${opt('fill', saved.fit)}>拉伸（拉伸填满）</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">平滑
+                        <select id="dgut-img-smooth" class="dgut-select" style="padding:5px 8px;">
+                            <option value="high"${opt('high', saved.smooth)}>高质量</option>
+                            <option value="browser"${opt('browser', saved.smooth)}>标准</option>
+                            <option value="none"${opt('none', saved.smooth)}>关闭option>
+                        </select>
+                    </label>
+                    <span style="font-size:11px;color:var(--dgut-outline);">缩小较多时选「高质量」，可减轻毛糙</span>
+                </div>
+            </div>
+
+            <div class="dgut-card">
+                <div class="dgut-section-title">图像处理</div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label"><input type="checkbox" id="dgut-img-sharpen" ${saved.sharpen ? 'checked' : ''}> 锐化</label>
+                    <label class="dgut-label">强度
+                        <input type="number" id="dgut-img-sharpen-amt" class="dgut-input" value="${saved.sharpenAmount}" min="0.1" max="3" step="0.1" style="width:60px;padding:4px 6px;">
+                    </label>
+                    <span style="font-size:11px;color:var(--dgut-outline);">照片压缩后若显毛糙，关掉锐化试试</span>
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label"><input type="checkbox" id="dgut-img-bw" ${saved.bw ? 'checked' : ''}> 黑白</label>
+                    <label class="dgut-label">阈值
+                        <input type="number" id="dgut-img-bw-thresh" class="dgut-input" value="${saved.bwThreshold}" min="0" max="255" style="width:60px;padding:4px 6px;">
+                    </label>
+                </div>
+                <div class="dgut-row">
+                    <label class="dgut-label"><input type="checkbox" id="dgut-img-eq" ${saved.eq ? 'checked' : ''}> 亮度均匀</label>
+                </div>
+            </div>
+
+            <div class="dgut-card">
+                <div class="dgut-section-title">输出</div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">格式
+                        <select id="dgut-img-format" class="dgut-select" style="padding:5px 8px;">
+                            <option value="keep"${opt('keep', saved.format)}>保持原格式</option>
+                            <option value="jpeg"${opt('jpeg', saved.format)}>JPEG</option>
+                            <option value="png"${opt('png', saved.format)}>PNG</option>
+                            <option value="webp"${opt('webp', saved.format)}>WebP</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">压缩到目标大小
+                        <input type="number" id="dgut-img-target" class="dgut-input" placeholder="留空=不限" min="0" value="${saved.targetSizeKB || ''}" style="width:90px;padding:4px 6px;"> KB
+                    </label>
+                    <label class="dgut-label">
+                        <input type="checkbox" id="dgut-img-allow-resize" ${saved.allowResize ? 'checked' : ''}> 允许降低分辨率
+                    </label>
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">输出质量
+                        <input type="number" id="dgut-img-quality" class="dgut-input" value="${saved.quality}" min="1" max="100" style="width:60px;padding:4px 6px;"> %
+                        <span id="dgut-img-quality-note" style="font-size:11px;color:var(--dgut-outline);"></span>
+                    </label>
+                </div>
+                <div class="dgut-row dgut-row--mb">
+                    <label class="dgut-label">增大到
+                        <input type="number" id="dgut-img-inflate" class="dgut-input" placeholder="留空=不增大" min="0" value="${saved.inflateKB || ''}" style="width:90px;padding:4px 6px;"> KB
+                    </label>
+                    <label class="dgut-label">填充
+                        <select id="dgut-img-inflate-mode" class="dgut-select" style="padding:5px 8px;">
+                            <option value="random"${opt('random', saved.inflateMode)}>随机填充</option>
+                            <option value="zero"${opt('zero', saved.inflateMode)}>全零填充</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="dgut-img-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-top:10px;line-height:1.7;"></div>
+            </div>
+
+            <div class="dgut-row dgut-row--end">
+                <button id="dgut-img-run" class="dgut-btn">${icons.list} 预览效果</button>
+                <button id="dgut-img-dl" class="dgut-btn dgut-btn-primary">${icons.export} 处理并下载</button>
+            </div>`;
+
+        const infoEl = ac.querySelector('#dgut-img-info');
+        const statusEl = ac.querySelector('#dgut-img-status');
+        const canvasEl = ac.querySelector('#dgut-img-preview');
+        const fileEl = ac.querySelector('#dgut-img-file');
+        const sizeModeEl = ac.querySelector('#dgut-img-sizemode');
+        const ratioEl = ac.querySelector('#dgut-img-ratio');
+        const wEl = ac.querySelector('#dgut-img-w');
+        const hEl = ac.querySelector('#dgut-img-h');
+        const targetEl = ac.querySelector('#dgut-img-target');
+        const qualityEl = ac.querySelector('#dgut-img-quality');
+        const qualityNoteEl = ac.querySelector('#dgut-img-quality-note');
+
+        const setStatus = (msg, isErr) => {
+            statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`;
+        };
+
+        const refreshVisibility = () => {
+            const m = sizeModeEl.value;
+            ac.querySelectorAll('[data-when]').forEach(el => {
+                el.style.display = (el.dataset.when === m) ? '' : 'none';
+            });
+        };
+
+        const refreshOutputState = () => {
+            const useTarget = Number(targetEl.value) > 0;
+            qualityEl.disabled = useTarget;
+            qualityNoteEl.textContent = useTarget ? '（已设定目标大小，质量自动调节）' : '';
+        };
+
+        const syncFromWidth = () => {
+            const preset = IMG_RATIO_PRESETS.find(p => p.id === ratioEl.value);
+            if (!preset || preset.id === 'orig' || preset.id === 'custom') return;
+            const W = Number(wEl.value) || 0;
+            if (W > 0) hEl.value = Math.max(1, Math.round(W * preset.h / preset.w));
+        };
+        const syncFromHeight = () => {
+            const preset = IMG_RATIO_PRESETS.find(p => p.id === ratioEl.value);
+            if (!preset || preset.id === 'orig' || preset.id === 'custom') return;
+            const H = Number(hEl.value) || 0;
+            if (H > 0) wEl.value = Math.max(1, Math.round(H * preset.w / preset.h));
+        };
+
+        const persistCfg = () => {
+            try { imgSaveCfg(imgReadCfg(ac)); } catch (e) {}
+        };
+
+        sizeModeEl.addEventListener('change', () => { refreshVisibility(); persistCfg(); });
+        wEl.addEventListener('input', () => { syncFromWidth(); persistCfg(); });
+        hEl.addEventListener('input', () => { syncFromHeight(); persistCfg(); });
+        ratioEl.addEventListener('change', () => {
+            if (wEl.value) syncFromWidth();
+            else if (hEl.value) syncFromHeight();
+            persistCfg();
+        });
+        targetEl.addEventListener('input', () => { refreshOutputState(); persistCfg(); });
+        ac.querySelectorAll('#dgut-img-smooth, #dgut-img-fit, #dgut-img-format, #dgut-img-inflate-mode, #dgut-img-allow-resize, #dgut-img-sharpen, #dgut-img-bw, #dgut-img-eq, #dgut-img-quality')
+            .forEach(el => el.addEventListener('change', persistCfg));
+
+        refreshVisibility();
+        refreshOutputState();
+
+        ac.querySelector('#dgut-img-reset').onclick = () => {
+            gImgState = null;
+            fileEl.value = '';
+            infoEl.textContent = '尚未选择图片。';
+            canvasEl.width = 0; canvasEl.height = 0;
+            setStatus('');
+        };
+
+        fileEl.addEventListener('change', async () => {
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) return;
+            setStatus('读取中…');
+            try {
+                const { img } = await imgFileToImage(file);
+                gImgState = { img, file, name: file.name, size: file.size, type: file.type };
+                infoEl.innerHTML =
+                    `原始尺寸：<b>${img.naturalWidth} × ${img.naturalHeight}</b> px · ` +
+                    `文件大小：<b>${imgFmtSize(file.size)}</b> · 类型：<b>${escapeHtml(file.type || '未知')}</b>`;
+                canvasEl.width = img.naturalWidth;
+                canvasEl.height = img.naturalHeight;
+                const c = canvasEl.getContext('2d');
+                c.clearRect(0, 0, canvasEl.width, canvasEl.height);
+                c.drawImage(img, 0, 0);
+                if (!wEl.value) wEl.value = img.naturalWidth;
+                if (!hEl.value) hEl.value = img.naturalHeight;
+                setStatus('已载入，可调整参数后点击「预览效果」或「处理并下载」。');
+            } catch (e) {
+                gImgState = null;
+                setStatus('读取失败：' + e.message, true);
+            }
+        });
+
+        const doPreview = async () => {
+            try {
+                setStatus('处理中…');
+                const { canvas, blob, inflated, achieved, targetBytes } = await imgRunPipeline(ac);
+                canvasEl.width = canvas.width;
+                canvasEl.height = canvas.height;
+                const c = canvasEl.getContext('2d');
+                c.clearRect(0, 0, canvas.width, canvas.height);
+                c.drawImage(canvas, 0, 0);
+
+                let msg;
+                if (targetBytes > 0 && !achieved) {
+                    msg = `⚠ 已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)}· 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
+                } else if (inflated) {
+                    msg = `✓ 输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}（已填充至目标大小）`;
+                } else {
+                    msg = `✓ 输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}`;
+                }
+                setStatus(msg);
+                return { canvas, blob };
+            } catch (e) {
+                setStatus('处理失败：' + e.message, true);
+                return null;
+            }
+        };
+
+        ac.querySelector('#dgut-img-run').onclick = doPreview;
+
+        ac.querySelector('#dgut-img-dl').onclick = async () => {
+            const r = await doPreview();
+            if (!r) return;
+            try {
+                const base = (gImgState?.name || 'image').replace(/\.[^.]+$/, '');
+                const ext = imgExtFromMime(r.blob.type);
+                const fname = `${base}_处理_${dateKey()}.${ext}`;
+                imgDownloadBlob(r.blob, fname);
+                setStatus(`✓ 已下载 ${fname} · ${imgFmtSize(r.blob.size)}`);
+            } catch (e) {
+                setStatus('下载失败：' + e.message, true);
+            }
+        };
+    }
+
     let gActionName = null;
     const ACTION_TITLES = {
         sign: '优学院课程签到',
@@ -2548,6 +3673,8 @@ ${sigImgs}
         peer: '作业互评记录',
         read: '求是读书',
         doc: '文档工具（MD→Word/PDF + 电子签名）',
+        wordpdf: 'Word 转 PDF',
+        imagetool: '图片工具（压缩/增大/处理）',
         appearance: '外观设置',
         about: '关于与帮助'
     };
@@ -2583,6 +3710,8 @@ ${sigImgs}
             case 'peer': renderPeerView(ac); break;
             case 'read': renderReadView(ac); break;
             case 'doc': renderDocToolView(ac); break;
+            case 'wordpdf': renderWordPdfView(ac); break;
+            case 'imagetool': renderImageToolView(ac); break;
             case 'appearance': renderAppearanceView(ac); break;
             case 'about': renderAboutView(ac); break;
             default: renderAboutView(ac);
@@ -2639,7 +3768,7 @@ ${sigImgs}
         };
     }
 
-    const ABOUT_VERSION = 'v5.1.1';
+    const ABOUT_VERSION = 'v5.2.0';
     function renderAboutView(ac) {
         const code = (s) => `<code>${s}</code>`;
         ac.innerHTML = actionHeader(ACTION_TITLES.about) + `
@@ -2648,13 +3777,13 @@ ${sigImgs}
                     <svg viewBox="0 0 24 24" width="40" height="40" style="fill:var(--dgut-primary);flex:none;"><path d="M12 3 1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>
                     <div>
                         <div style="font-size:16px;font-weight:700;">优学院助手 + 文档工具</div>
-                        <div style="font-size:12px;color:var(--dgut-on-surface-variant);">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
+                        <div style="font-size:12px;color:var(--dgut-on-surface-variant);">课程签到 / 刷课助手 / 作业互评 / 求是读书 / MD 转 Word·PDF / Word 转 PDF / 图片工具 / 电子签名 &nbsp;·&nbsp; ${ABOUT_VERSION}</div>
                     </div>
                 </div>
-                <p style="margin:10px 0 0;font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;">面向东莞理工学院优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
+                <p style="margin:10px 0 0;font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;">面向优学院平台的浏览器增强脚本。作者 <b>BrocadeHutHost</b> · 开源许可 <b>AGPL-3.0-only</b>。</p>
             </div>
             <div class="dgut-hint">
-                <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片；刷课自动答题的未知题型一律跳过；文档工具的全部处理均在浏览器本地完成。
+                <b>说明与提示</b>：本脚本会请求 ${code('lms.dgut.edu.cn')}、${code('application.dgut.edu.cn')}、${code('ua.dgut.edu.cn')} 等优学院域名下的接口。签到不识别教室现场二维码图片；刷课自动答题的未知题型一律跳过；文档工具（含 PDF 生成）与图片处理全部在浏览器本地完成。
             </div>`;
     }
 
@@ -2684,9 +3813,10 @@ ${sigImgs}
                     <button class="dgut-nav" data-action="peer">${icons.peer} 作业互评</button>
                     <button class="dgut-nav" data-action="read">${icons.read} 求是读书</button>
                     <div class="dgut-nav-label">工具</div>
-                    <button class="dgut-nav" data-action="doc">${icons.doc} 文档工具</button>
+                    <button class="dgut-nav" data-action="doc">${icons.doc} md转word/PDF</button>
+                    <button class="dgut-nav" data-action="wordpdf">${icons.doc} Word 转 PDF</button>
+                    <button class="dgut-nav" data-action="imagetool">${icons.upload} 照片处理</button>
                     <button class="dgut-nav" data-action="appearance">${icons.theme} 外观设置</button>
-                    <button class="dgut-nav" data-action="about">${icons.settings} 关于/帮助</button>
                     <div style="flex:1;"></div>
                     <div id="dgut-panel-footer-version">${ABOUT_VERSION}</div>
                 </div>
@@ -2820,7 +3950,9 @@ ${sigImgs}
         GM_registerMenuCommand('优学院刷课助手', () => openActionView('course'));
         GM_registerMenuCommand('作业互评记录', () => openActionView('peer'));
         GM_registerMenuCommand('求是读书', () => openActionView('read'));
-        GM_registerMenuCommand('文档工具（MD→Word/PDF + 电子签名）', () => openActionView('doc'));
+        GM_registerMenuCommand('md转word/PDF', () => openActionView('doc'));
+        GM_registerMenuCommand('Word 转 PDF', () => openActionView('wordpdf'));
+        GM_registerMenuCommand('照片处理工具', () => openActionView('imagetool'));
         GM_registerMenuCommand('外观设置（主题/主体色）', () => openActionView('appearance'));
 
         createMiniPanel();
