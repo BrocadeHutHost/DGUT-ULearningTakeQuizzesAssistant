@@ -58,9 +58,6 @@
     const DETAIL_TAB_KEY = 'dgut_detail_tab';
     const DEBUG = true;
 
-    /* ============================================================
-     * 错误码系统
-     * ============================================================ */
     const ERR = {
         SIGN_NO_TOKEN:      { code: 1131, msg: '无法获取 Token，请先登录优学院' },
         SIGN_TOKEN_EXPIRED: { code: 1132, msg: 'Token 已过期，请重新登录' },
