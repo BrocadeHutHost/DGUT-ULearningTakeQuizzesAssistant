@@ -12,6 +12,9 @@
 > <img width="767" height="452" alt="image" src="https://github.com/user-attachments/assets/9bdf12f3-feee-44d8-91a2-8d7b25f18fd8" />
 > - md转文段与签名效果
 > <img width="603" height="1048" alt="image" src="https://github.com/user-attachments/assets/7d300a11-77c0-4de1-a655-a602dd759976" />
+> - 下载PDF的效果
+> <img width="877" height="526" alt="image" src="https://github.com/user-attachments/assets/f416c507-ae40-4f7b-8538-a026e4355764" />
+
 
 
 ---
@@ -131,9 +134,6 @@
 
 > ** 关于 Word 转 PDF**：目前 Word 转 PDF 功能尚不够完美，复杂排版、特殊字体或表格可能出现样式偏差或分页不理想的情况，后续版本将持续优化。
 
-md转文段与签名效果
-<img width="567" height="275" alt="image" src="https://github.com/user-attachments/assets/1fa1377a-8d13-435b-a77c-4ea2b070a6f0" />
-
 ### 图片工具
 
 打开面板侧栏的“照片处理”（图片工具）：
@@ -158,7 +158,6 @@ md转文段与签名效果
    - 增大到：在文件末尾追加填充数据到指定大小（可选随机字节或全零字节）。
 6. **预览与下载**：点击“预览效果”查看处理结果，点击“处理并下载”保存到本地。
 
-<img width="800" height="575" alt="image" src="https://github.com/user-attachments/assets/c1b0c786-b8ea-4ef1-871a-f4c62c20f8b5" />
 
 ### 外观设置
 
