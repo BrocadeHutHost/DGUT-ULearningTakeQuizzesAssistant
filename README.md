@@ -4,8 +4,8 @@
 >
 > **近期更新：**
 > - 新增 **PDF 直接下载**（无需跳转打印对话框）
-> - 新增 **图片工具**（压缩/增大/高质量平滑处理）
-> - **特别提醒：签到功能存在问题，正在排查中**
+> - 新增 **图片工具**（压缩/增大等常见需求）
+> - **特别提醒：签到功能存在问题，已修复待验证**
 > - **Word 转 PDF 目前不够完美，后续将持续优化**
 >
 > 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
