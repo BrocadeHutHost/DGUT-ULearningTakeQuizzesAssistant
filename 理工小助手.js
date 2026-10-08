@@ -1827,6 +1827,13 @@
         pgTouchPageDwell();
         if (document.querySelector('.question-setting-panel')) {
             if (Date.now() < gPgQuestionUntil) { chUpdateStatus(); return; }
+            if (!getCourseHelperConfig().autoAnswer) {
+                /* 自动答题关闭：仅在题目都已作答完成（或本页无题）时翻页，不干扰手动作答 */
+                const left = document.querySelectorAll('.question-wrapper:not(.finished)').length;
+                if (left === 0) pgClickNext('题目已全部完成（自动答题关闭）');
+                else { gPgQuestionUntil = Date.now() + 3000; chUpdateStatus(); }
+                return;
+            }
             pgAnswerAll();
             return;
         }
