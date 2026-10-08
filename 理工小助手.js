@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.6.0
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @version      5.7.0
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -61,6 +61,9 @@
     const DETAIL_TAB_KEY = 'dgut_detail_tab';
     const DEBUG = true;
 
+    /* ============================================================
+     * 错误码系统
+     * ============================================================ */
     const ERR = {
         SIGN_NO_TOKEN:      { code: 1131, msg: '无法获取 Token，请先登录优学院' },
         SIGN_TOKEN_EXPIRED: { code: 1132, msg: 'Token 已过期，请重新登录' },
@@ -698,13 +701,22 @@
         #dgut-mini-panel .mini-ring { stroke: var(--dgut-primary); }
         #dgut-mini-panel .mini-check { stroke: var(--dgut-primary); }
         #dgut-mini-panel:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--dgut-primary) 40%, transparent); transform: scale(1.06); }
-        #dgut-main-panel { position: fixed; z-index: 2147483000; width: 780px; max-width: 98vw; background: var(--dgut-surface); color: var(--dgut-on-surface); border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.35); font-family: var(--dgut-font); overflow: hidden; border: 1px solid var(--dgut-outline-variant); display: flex; flex-direction: column; }
+        #dgut-main-panel { position: fixed; z-index: 2147483000; width: 780px; height: 620px; max-width: 98vw; max-height: 96vh; background: var(--dgut-surface); color: var(--dgut-on-surface); border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.35); font-family: var(--dgut-font); overflow: hidden; border: 1px solid var(--dgut-outline-variant); display: flex; flex-direction: column; transform-origin: 0 0; }
+        .dgut-resizer { position: absolute; z-index: 6; }
+        #dgut-panel-resizer-e { right: 0; top: 10px; bottom: 20px; width: 7px; cursor: ew-resize; }
+        #dgut-panel-resizer-w { left: 0; top: 10px; bottom: 20px; width: 7px; cursor: ew-resize; }
+        #dgut-panel-resizer-s { left: 20px; right: 20px; bottom: 0; height: 7px; cursor: ns-resize; }
+        #dgut-panel-resizer-n { left: 20px; right: 20px; top: 0; height: 7px; cursor: ns-resize; }
+        #dgut-panel-resizer-se { right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; }
+        #dgut-panel-resizer-se::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 8px; height: 8px; border-right: 2px solid var(--dgut-outline); border-bottom: 2px solid var(--dgut-outline); border-radius: 0 0 3px 0; opacity: .75; }
+        #dgut-panel-resizer-e:hover, #dgut-panel-resizer-w:hover, #dgut-panel-resizer-s:hover, #dgut-panel-resizer-n:hover { background: color-mix(in srgb, var(--dgut-primary) 22%, transparent); }
+        #dgut-panel-zoom-badge { position: absolute; right: 26px; bottom: 8px; z-index: 7; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--dgut-secondary-container); color: var(--dgut-on-secondary-container); box-shadow: 0 1px 4px rgba(0,0,0,.25); opacity: 0; transition: opacity .15s; pointer-events: none; }
         #dgut-panel-header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--dgut-primary); color: var(--dgut-on-primary); cursor: move; user-select: none; }
         #dgut-panel-header .panel-title { font-size: 14px; font-weight: 700; line-height: 1.25; }
         #dgut-panel-close { border: none; background: color-mix(in srgb, var(--dgut-on-primary) 20%, transparent); color: var(--dgut-on-primary); width: 30px; height: 30px; border-radius: 50%; font-size: 17px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex: none; transition: background .15s; font-family: inherit; }
         #dgut-panel-close:hover { background: color-mix(in srgb, var(--dgut-on-primary) 32%, transparent); }
-        #dgut-sidebar { width: 158px; flex: none; background: var(--dgut-surface-2); border-right: 1px solid var(--dgut-outline-variant); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
-        #dgut-panel-body { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 12px; max-height: 72vh; background: var(--dgut-surface); }
+        #dgut-sidebar { width: 158px; flex: none; min-height: 0; background: var(--dgut-surface-2); border-right: 1px solid var(--dgut-outline-variant); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden; }
+        #dgut-panel-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; padding: 10px 12px; background: var(--dgut-surface); }
         #dgut-panel-footer-version { font-size: 10px; color: var(--dgut-on-surface-variant); text-align: center; padding: 6px 0; opacity: .7; }
         .dgut-tab-bar { display: flex; gap: 4px; border-bottom: 1px solid var(--dgut-outline-variant); margin-bottom: 12px; }
         .dgut-tab-btn { padding: 8px 14px; border: none; background: transparent; color: var(--dgut-on-surface-variant); font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit; transition: color .15s, border-color .15s; }
@@ -1242,11 +1254,26 @@
     }
 
     /* ============================================================
-     * 刷课助手
+     * 刷课助手（唯一实现：pg* 内核）
+     *   1) 答案接口是「真异步」：await GM_xmlhttpRequest，绝不再同步取异步结果
+     *   2) 自动答题 / 自动翻页 两个开关真实生效
+     *   3) 取不到答案 → 不提交、不空交，按轮次重试
+     *   4) 视频卡死/加载失败检测 + 分级恢复（重播 → 重建 → 重进页面 → 刷新）
+     *   5) 任务代次（epoch）作废过期计划，杜绝重复提交与提前翻页
+     *   6) 专题末页从目录寻找下一个未完成页面
      * ============================================================ */
     const DEFAULT_COURSE_HELPER = { enabled: false, rate: 6, autoAnswer: true, autoNext: true, collectBank: true };
     let gCourseHelper = null;
     const pgSleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const PG_TICK_MS = 1500;                 // 主循环间隔
+    const PG_PAGE_DWELL_MS = 2000;           // 换页后最短停留，避免误判
+    const PG_ADVANCE_COOLDOWN_MS = 2500;     // 两次翻页最短间隔
+    const PG_SAME_PAGE_GUARD_MS = 10000;     // 同一页重复翻页保护
+    const PG_STALL_MS = 12000;               // 播放停滞判定阈值
+    const PG_MAX_NO_ANSWER_ROUNDS = 6;       // 取不到答案的重试轮次上限
+    const PG_SKIP_TTL_MS = 30 * 60 * 1000;   // 跳过页面的记忆时长
+    const PG_ANSWER_TTL_MS = 5 * 60 * 1000;  // 答案缓存时长
 
     function isCoursePage() { return /learnCourse/i.test(location.pathname) || /learnCourse/i.test(location.href); }
     function getCourseHelperConfig() { return Object.assign({}, DEFAULT_COURSE_HELPER, GM_getValue(COURSE_HELPER_KEY, {}) || {}); }
@@ -1254,6 +1281,7 @@
     function pgVisible(el) { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
     function pgReText(text) { return String(text || '').replace(/<\/?.+?\/?>/g, '').replace(/[\t\n\r]/g, '').replace(/&.*?;/g, '').trim(); }
     function pgTriggerMouseSequence(el) { if (!el) return; ['mousedown', 'mouseup', 'click'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) {} }); try { if (typeof el.click === 'function') el.click(); } catch (e) {} }
+    function pgLog(tag, message, detail) { try { if (typeof debugLog === 'function') debugLog(tag, message, detail); } catch (e) {} }
     function chLog(text, level = 'info') {
         const el = document.getElementById('dgut-ch-log');
         if (el) {
@@ -1279,6 +1307,22 @@
                 ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
             });
         });
+    }
+
+    /* ---------------- 答案缓存（接口答案复用，减少网络抖动影响） ---------------- */
+    const pgAnswerCache = new Map();
+    function pgAnswerCacheGet(qid) {
+        const key = String(qid || ''); if (!key) return null;
+        const rec = pgAnswerCache.get(key);
+        if (!rec) return null;
+        if (Date.now() - rec.t > PG_ANSWER_TTL_MS) { pgAnswerCache.delete(key); return null; }
+        return rec.v.slice();
+    }
+    function pgAnswerCacheSet(qid, list) {
+        const key = String(qid || '');
+        if (!key || !Array.isArray(list) || !list.length) return;
+        pgAnswerCache.set(key, { v: list.map(String), t: Date.now() });
+        if (pgAnswerCache.size > 500) { const first = pgAnswerCache.keys().next().value; pgAnswerCache.delete(first); }
     }
 
     const pgRateGuard = {
@@ -1380,32 +1424,41 @@
         return null;
     }
     function pgBank() { return GM_getValue(BANK_KEY, []) || []; }
-    function pgBankAnswer(node) {
+    function pgQuestionId(node) {
         const idAttr = (node.querySelector('.question-wrapper') || node).getAttribute('id') || '';
-        const qid = idAttr.startsWith('question') ? idAttr.substring(8) : idAttr;
+        return idAttr.startsWith('question') ? idAttr.substring(8) : idAttr;
+    }
+    function pgBankAnswer(node) {
+        const qid = pgQuestionId(node);
         if (!qid) return null;
         const rec = pgBank().find(r => String(r.qid) === String(qid));
         return rec && rec.answer ? String(rec.answer).split(/[,\s|，、]+/).filter(Boolean) : null;
     }
+    /* 真异步：内部 await，调用方拿到的就是最终结果，不再出现「同步取异步」 */
     async function pgRemoteAnswer(node) {
-        const idAttr = (node.querySelector('.question-wrapper') || node).getAttribute('id') || '';
-        const qid = idAttr.startsWith('question') ? idAttr.substring(8) : idAttr;
+        const qid = pgQuestionId(node);
         if (!qid) return null;
+        const cached = pgAnswerCacheGet(qid);
+        if (cached) return cached;
         const parentIdAttr = document.querySelector('.page-name.active')?.parentElement?.getAttribute('id') || '';
         const parentId = parentIdAttr.length > 4 ? parentIdAttr.substring(4) : '';
         const host = location.hostname.includes('dgut.edu.cn') ? 'https://ua.dgut.edu.cn' : 'https://api.ulearning.cn';
         try {
             const data = await pgRequestJson(`${host}/uaapi/questionAnswer/${qid}?parentId=${parentId}`);
-            if (data && Array.isArray(data.correctAnswerList) && data.correctAnswerList.length) return data.correctAnswerList.map(String);
-        } catch (e) {}
+            const list = (data && Array.isArray(data.correctAnswerList) ? data.correctAnswerList : []).map(String).filter(Boolean);
+            if (list.length) { pgAnswerCacheSet(qid, list); return list; }
+        } catch (e) { pgLog('AnswerAPI', '取答案失败：' + (e && e.message ? e.message : e)); }
         return null;
     }
-    function pgResolveType(node, tag) {
+    function pgResolveType(node, tag, answerLen) {
         if (node.querySelector('.blank-input')) return '填空题';
         if (node.querySelector('.cloze-input')) return '选词填空';
         if (node.querySelector('.answer-blank')) return '排序题';
         if (node.querySelector('.choice-btn.right-btn')) return '判断题';
-        if (node.querySelector('.choice-list .choice-item')) return '单选题';
+        if (node.querySelector('.choice-list .choice-item')) {
+            if (Number(answerLen) > 1 || /多选/.test(String(tag || ''))) return '多选题';
+            return '单选题';
+        }
         if (node.querySelector('.form-control')) return '简答题';
         return tag || '未知';
     }
@@ -1414,7 +1467,7 @@
         const w = node.querySelector('.question-wrapper') || node;
         if (type === '判断题') {
             const val = String(answers[0]).toLowerCase();
-            const isTrue = val === 'true' || val === '正确' || val === '对' || val === '1';
+            const isTrue = val === 'true' || val === '正确' || val === '对' || val === '1' || val === 'a';
             const btn = w.querySelector(isTrue ? '.choice-btn.right-btn' : '.choice-btn.wrong-btn');
             if (btn) { pgTriggerMouseSequence(btn); return true; }
             return false;
@@ -1423,8 +1476,9 @@
             const items = Array.from(w.querySelectorAll('.choice-list .choice-item'));
             const idxs = answers.map(a => { const m = String(a).toUpperCase().match(/[A-Z]/); return m ? m[0].charCodeAt(0) - 65 : -1; }).filter(i => i >= 0 && i < items.length);
             const target = type === '多选题' ? idxs : (idxs.length ? [idxs[0]] : []);
+            if (!target.length) return false;
             target.forEach(i => { try { const cb = items[i].querySelector('.checkbox'); if (cb) cb.classList.add('selected'); } catch (e) {} pgTriggerMouseSequence(items[i]); });
-            return target.length > 0;
+            return true;
         }
         if (type === '填空题' || type === '选词填空') {
             const inputs = Array.from(w.querySelectorAll('.blank-input, .cloze-input, .answer-width input, .answer-width'));
@@ -1475,6 +1529,25 @@
         GM_setValue(BANK_KEY, Object.values(map));
         return Object.values(map).length;
     }
+    /* 作答成功后把答案写回题库，下次可直接命中 */
+    function pgRememberAnswer(node, answers) {
+        try {
+            const qid = pgQuestionId(node);
+            if (!qid || !answers || !answers.length) return;
+            const w = node.querySelector('.question-wrapper') || node;
+            const records = pgBank();
+            const idx = records.findIndex(r => String(r.qid) === String(qid));
+            const patch = {
+                qid,
+                sort: pgReText((w.querySelector('.question-sort') || {}).textContent || ''),
+                qType: pgReText((w.querySelector('.question-type-tag') || {}).textContent || ''),
+                title: pgReText((w.querySelector('.question-title-html') || {}).textContent || ''),
+                answer: answers.join(','), updatedAt: new Date().toISOString()
+            };
+            if (idx === -1) records.push(patch); else records[idx] = Object.assign({}, records[idx], patch);
+            GM_setValue(BANK_KEY, records);
+        } catch (e) {}
+    }
     function pgBankHtml(records) {
         const rows = records.map((r, idx) => `<div class="q"><h3>${escapeHtml((r.sort || (idx + 1)) + '. [' + (r.qType || '未知') + '] ' + r.title)}</h3>${r.options && r.options.length ? '<ol type="A">' + r.options.map(o => '<li>' + escapeHtml(String(o).replace(/^[A-Z]\.\s*/, '')) + '</li>').join('') + '</ol>' : ''}<p><b>答案：</b>${escapeHtml(r.answer || '（空）')}</p></div>`).join('');
         return `<!doctype html><html><head><meta charset="utf-8"><title>题库导出</title><style>body{font-family:'Microsoft YaHei',sans-serif;line-height:1.6}.q{border:1px solid #ddd;padding:10px;margin:8px 0;border-radius:6px}</style></head><body><h1>Ulearning 题库导出</h1><div>导出时间：${new Date().toLocaleString()} · 共 ${records.length} 题</div>${rows || '<p>暂无题目</p>'}</body></html>`;
@@ -1492,12 +1565,19 @@
     }
     function pgClearBank() { GM_setValue(BANK_KEY, []); showStatus('题库已清空'); }
 
+    /* ---------------- 运行状态（任务代次 epoch 用于作废过期计划） ---------------- */
     let gPgAnswering = false, gPgQuestionUntil = 0;
     let gPgLastAdvanceAt = 0;
     let gPgAdvancePageId = '';
     let gPgMediaWaitSince = 0;
     let gPgPageChangeAt = Date.now();
     let gPgLastPageId = '';
+    let gPgEpoch = 0;
+    let gPgEndWarned = false;
+    let gPgNextWarned = false;
+    let gPgAnswerOffWarned = false;
+    const gPgSkippedPages = new Map();     // 页面 key -> 跳过时间
+    const gPgNoAnswerRounds = new Map();   // 页面 key -> 连续取不到答案的轮次
 
     function pgPageId() {
         const a = document.querySelector('.page-name.active');
@@ -1509,7 +1589,6 @@
     function pgHasMediaContainer() {
         return document.querySelectorAll('.file-media, .video-element, .video-wrapper, .courseware-video, .video-box, .prism-player, .vjs-tech, .mejs__container').length > 0;
     }
-
     function pgVideoFinished(v) {
         if (!v) return false;
         const dur = Number(v.duration);
@@ -1536,21 +1615,72 @@
     }
     function pgTouchPageDwell() {
         const pid = pgPageId();
-        if (pid !== gPgLastPageId) { gPgLastPageId = pid; gPgPageChangeAt = Date.now(); }
+        if (pid !== gPgLastPageId) {
+            gPgLastPageId = pid; gPgPageChangeAt = Date.now();
+            gPgEpoch++;                 // 页面已切换：作废上一页遗留的异步计划
+            gPgQuestionUntil = 0;
+            gPgEndWarned = false;
+            gPgNextWarned = false;
+            gPgNoAnswerRounds.delete(pid);
+        }
+        return pid;
     }
-    function pgClickNext() {
+    /* ---------------- 目录（跨专题）翻页 ---------------- */
+    function pgCatalogPages() {
+        let list = Array.from(document.querySelectorAll('.section-item .page-name'));
+        if (!list.length) list = Array.from(document.querySelectorAll('.page-name'));
+        return list;
+    }
+    function pgPageKeyOf(el) {
+        if (!el) return '';
+        const sec = el.closest ? el.closest('.section-item') : null;
+        const secName = sec ? pgReText((sec.querySelector('.section-name .text') || {}).textContent || '') : '';
+        return (secName + '|' + (el.textContent || '')).replace(/\s+/g, ' ').trim();
+    }
+    function pgNextCatalogPage() {
+        const pages = pgCatalogPages();
+        if (pages.length < 2) return null;
+        const cur = pgPageId();
+        let idx = pages.findIndex(el => el.classList.contains('active'));
+        if (idx === -1 && cur) idx = pages.findIndex(el => pgPageKeyOf(el) === cur);
+        if (idx === -1) return null;
         const now = Date.now();
+        for (let i = idx + 1; i < pages.length; i++) {
+            const key = pgPageKeyOf(pages[i]);
+            const at = gPgSkippedPages.get(key);
+            if (at && now - at < PG_SKIP_TTL_MS) continue;   // 本会话内已判定跳过
+            return pages[i];
+        }
+        return null;
+    }
+    function pgClickNext(reason) {
+        const now = Date.now();
+        const cfg = getCourseHelperConfig();
         pgTouchPageDwell();
-        if (now - gPgPageChangeAt < 2000) return false;
-        if (now - gPgLastAdvanceAt < 2500) return false;
+        if (!cfg.autoNext) {
+            if (!gPgNextWarned) { gPgNextWarned = true; chLog('「自动翻页」已关闭：停留当前页，仅播放与答题。', 'muted'); }
+            return false;
+        }
+        gPgNextWarned = false;
+        if (now - gPgPageChangeAt < PG_PAGE_DWELL_MS) return false;
+        if (now - gPgLastAdvanceAt < PG_ADVANCE_COOLDOWN_MS) return false;
         const pid = pgPageId();
-        if (pid && pid === gPgAdvancePageId && now - gPgLastAdvanceAt < 10000) return false;
-        const b = document.querySelector('.next-page-btn.cursor');
-        if (!b) return false;
-        pgTriggerMouseSequence(b);
-        gPgLastAdvanceAt = now;
-        gPgAdvancePageId = pid;
-        return true;
+        if (pid && pid === gPgAdvancePageId && now - gPgLastAdvanceAt < PG_SAME_PAGE_GUARD_MS) return false;
+        let btn = document.querySelector('.next-page-btn.cursor');
+        if (!btn) {
+            const all = Array.from(document.querySelectorAll('.next-page-btn'));
+            btn = all.find(b => !b.disabled && !b.classList.contains('disabled')) || null;
+        }
+        if (btn) { pgTriggerMouseSequence(btn); gPgLastAdvanceAt = now; gPgAdvancePageId = pid; return true; }
+        const nextPage = pgNextCatalogPage();
+        if (nextPage) {
+            chLog('本专题已无「下一页」，从目录跳转到：' + (pgReText(nextPage.textContent) || '下一节'), 'info');
+            pgTriggerMouseSequence(nextPage);
+            gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
+            return true;
+        }
+        if (!gPgEndWarned) { gPgEndWarned = true; chLog('已是最后一页，未找到下一个未完成页面（' + (reason || '') + '）。', 'warn'); }
+        return false;
     }
     function pgDismissModal() {
         const modal = document.querySelector('.modal.fade.in');
@@ -1560,29 +1690,134 @@
         if (id === 'alertModal') { const h = modal.querySelectorAll('.btn-hollow'); (h.length ? h[h.length - 1] : modal.querySelector('.btn-submit'))?.click(); return true; }
         return false;
     }
+
+    /* ---------------- 视频卡死 / 加载失败检测与分级恢复 ---------------- */
+    const pgVideoStates = new WeakMap();
+    function pgVideoState(v) {
+        let s = pgVideoStates.get(v);
+        if (!s) { s = { ct: -1, progressAt: Date.now(), attempts: 0, lastActAt: 0, reloads: 0 }; pgVideoStates.set(v, s); }
+        return s;
+    }
+    function pgVideoBroken(v) {
+        try { if (v.error) return true; } catch (e) {}
+        try { if (v.networkState === 3) return true; } catch (e) {}   // NETWORK_NO_SOURCE
+        return false;
+    }
+    function pgVideoWatchdog(v) {
+        const now = Date.now();
+        const s = pgVideoState(v);
+        let ct = 0; try { ct = Number(v.currentTime) || 0; } catch (e) {}
+        if (Math.abs(ct - s.ct) > 0.25) { s.ct = ct; s.progressAt = now; s.attempts = 0; return; }   // 有进度，健康
+        let dur = 0; try { dur = Number(v.duration) || 0; } catch (e) {}
+        if (dur > 0 && ct >= dur - 0.3) { s.progressAt = now; s.attempts = 0; return; }             // 已播完
+        if (v.seeking) { s.progressAt = now; return; }
+        const stallFor = now - s.progressAt;
+        const broken = pgVideoBroken(v) || ((typeof v.readyState === 'number' && v.readyState === 0) && stallFor > 8000);
+        if (!broken && stallFor < PG_STALL_MS) return;
+        if (now - s.lastActAt < 5000) return;                       // 恢复动作节流，避免抖动
+        s.lastActAt = now; s.attempts++;
+        const why = broken ? '媒体加载失败 / 无可用源' : ('播放停滞 ' + Math.round(stallFor / 1000) + 's');
+        chLog('视频异常（' + why + '），执行第 ' + s.attempts + ' 次恢复…', 'warn');
+        try {
+            const rate = pgRateGuard.target;
+            if (s.attempts === 1) {
+                v.muted = true;
+                try { if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate); } catch (e) {}
+                const p = v.play(); if (p && p.catch) p.catch(() => {});
+                try { v.currentTime = ct + 0.5; } catch (e) {}
+            } else if (s.attempts === 2) {
+                const idx = Array.from(document.querySelectorAll('video')).indexOf(v);
+                const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[idx];
+                if (playBtn) pgTriggerMouseSequence(playBtn);
+                else { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+            } else if (s.attempts === 3) {
+                try { v.load(); } catch (e) {}
+                const p = v.play(); if (p && p.catch) p.catch(() => {});
+            } else {
+                const key = 'dgut_pg_reload_' + (pgPageId() || 'page');
+                let n = 0; try { n = Number(sessionStorage.getItem(key) || 0) || 0; } catch (e) {}
+                if (n < 2) {
+                    s.reloads++;
+                    try { sessionStorage.setItem(key, String(n + 1)); } catch (e) {}
+                    chLog('多次恢复失败，刷新页面重建播放器（第 ' + (n + 1) + '/2 次）。', 'warn');
+                    setTimeout(() => { try { location.reload(); } catch (e) {} }, 800);
+                    s.lastActAt = now + 30000;
+                } else if (!s.gaveUp) {
+                    s.gaveUp = true;
+                    chLog('视频多次恢复失败，已停止自动恢复（请手动检查网络或播放器）。', 'warn');
+                    s.lastActAt = now + 120000;
+                }
+            }
+        } catch (e) {}
+    }
+
+    /* ---------------- 自动答题（异步、幂等、取不到答案不提交） ---------------- */
     async function pgAnswerAll() {
         if (gPgAnswering) return;
-        gPgAnswering = true;
         const cfg = getCourseHelperConfig();
+        if (!cfg.autoAnswer) {
+            if (!gPgAnswerOffWarned) { gPgAnswerOffWarned = true; chLog('「自动答题」已关闭：只播放/翻页，不答题不提交。', 'muted'); }
+            gPgQuestionUntil = Date.now() + 3000;
+            return;
+        }
+        gPgAnswerOffWarned = false;
+        gPgAnswering = true;
+        const epoch = gPgEpoch;
+        gPgQuestionUntil = Date.now() + 8000;     // 答题期间不再重复进入
+        let total = 0, answered = 0, pending = 0;
         try {
             const nodes = Array.from(document.querySelectorAll('.question-element-node'));
             if (cfg.collectBank) pgCollectBank();
             for (const node of nodes) {
+                if (epoch !== gPgEpoch) return;                        // 页面已切换：丢弃本页剩余计划
                 const w = node.querySelector('.question-wrapper');
                 if (!w || w.classList.contains('finished')) continue;
-                if (!cfg.autoAnswer) continue;
+                const lastSubmit = Number((w.dataset && w.dataset.dgutSubmittedAt) || 0);
+                if (lastSubmit && Date.now() - lastSubmit < 20000) continue;   // 已提交过：避免重复计划提交
+                total++;
                 const tag = pgReText((w.querySelector('.question-type-tag') || {}).textContent || '');
-                const type = pgResolveType(w, tag);
                 let answers = pgVmAnswer(node) || pgBankAnswer(node);
-                if (!answers) answers = await pgRemoteAnswer(node);
-                if (answers && answers.length) { pgApplyAnswer(w, answers.length > 1 && type === '单选题' ? '多选题' : type, answers); await pgSleep(180); }
-                pgSubmitQuestion(node);
+                if (!answers) answers = await pgRemoteAnswer(node);     // 真异步等待，不再"同步取异步"
+                if (epoch !== gPgEpoch) return;
+                if (!answers || !answers.length) { pending++; continue; }   // 取不到答案：绝不提交
+                const type = pgResolveType(w, tag, answers.length);
+                if (!pgApplyAnswer(w, type, answers)) { pending++; continue; }
+                await pgSleep(180);
+                if (epoch !== gPgEpoch) return;
+                pgSubmitQuestion(node);                                 // 只有确认已填答案才提交
+                try { w.dataset.dgutSubmittedAt = String(Date.now()); } catch (e) {}
+                if (cfg.collectBank) pgRememberAnswer(node, answers);
+                answered++;
+                await pgSleep(120);
             }
-            const gb = document.querySelector('.question-operation-area button');
-            if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
+            if (epoch !== gPgEpoch) return;
+            if (total > 0 && answered > 0 && pending === 0) {
+                const gb = document.querySelector('.question-operation-area button');
+                if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
+            }
+            if (pending > 0) {
+                const key = pgPageId();
+                const rounds = (gPgNoAnswerRounds.get(key) || 0) + 1;
+                gPgNoAnswerRounds.set(key, rounds);
+                chLog(`有 ${pending}/${total} 题未取到答案，已跳过提交（第 ${rounds}/${PG_MAX_NO_ANSWER_ROUNDS} 轮重试）。`, 'warn');
+                if (rounds >= PG_MAX_NO_ANSWER_ROUNDS) {
+                    gPgSkippedPages.set(key, Date.now());
+                    chLog('本轮仍未取到答案：为不空交，本页不提交；已记录该页并继续后续页面。', 'warn');
+                    gPgNoAnswerRounds.set(key, 0);
+                    gPgQuestionUntil = Date.now() + 2500;
+                    await pgSleep(500);
+                    if (epoch !== gPgEpoch) return;
+                    pgClickNext('跳过无法作答的页面');
+                    return;
+                }
+                gPgQuestionUntil = Date.now() + 2600;
+                return;                                                // 未取到答案：不翻页，稍后重试
+            }
+            gPgNoAnswerRounds.delete(pgPageId());
             gPgQuestionUntil = Date.now() + 1500;
-            await pgSleep(900);
-            pgClickNext();
+            await pgSleep(600);
+            if (epoch !== gPgEpoch) return;
+            pgClickNext('答题完成');
         } finally { gPgAnswering = false; }
     }
 
@@ -1591,7 +1826,7 @@
         if (pgDismissModal()) return;
         pgTouchPageDwell();
         if (document.querySelector('.question-setting-panel')) {
-            if (Date.now() < gPgQuestionUntil) return;
+            if (Date.now() < gPgQuestionUntil) { chUpdateStatus(); return; }
             pgAnswerAll();
             return;
         }
@@ -1608,6 +1843,7 @@
                 if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate);
                 const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[i];
                 if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
+                pgVideoWatchdog(v);                       // 卡死检测
                 if (v.paused) {
                     v.muted = true;
                     v.play().catch(() => {
@@ -1617,7 +1853,7 @@
                 }
                 break;
             }
-            if (i === videos.length) pgClickNext();
+            if (i === videos.length) pgClickNext('视频已全部完成');
             else chUpdateStatus();
             return;
         }
@@ -1627,7 +1863,7 @@
             if (Date.now() - gPgMediaWaitSince < 10000) return;
         }
         gPgMediaWaitSince = 0;
-        pgClickNext();
+        pgClickNext('当前页无视频');
     }
 
     function chUpdateStatus() {
@@ -1637,7 +1873,7 @@
         const page = pgReText((document.querySelector('.page-name.active') || {}).textContent || '');
         const qLeft = document.querySelectorAll('.question-wrapper:not(.finished)').length;
         if (gCourseHelper && gCourseHelper.running) {
-            el.innerHTML = `<span style="color:var(--dgut-success);font-weight:600;">● 运行中</span> · 页面「${escapeHtml(page || '未知')}」 · 视频 ${document.querySelectorAll('video').length} · 未完成题 ${qLeft} · 倍速 ${cfg.rate}×`;
+            el.innerHTML = `<span style="color:var(--dgut-success);font-weight:600;">● 运行中</span> · 页面「${escapeHtml(page || '未知')}」 · 视频 ${document.querySelectorAll('video').length} · 未完成题 ${qLeft} · 倍速 ${cfg.rate}× · 自动答题${cfg.autoAnswer ? '开' : '关'} · 自动翻页${cfg.autoNext ? '开' : '关'}`;
         } else {
             el.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">○ 未运行</span>`;
         }
@@ -1647,18 +1883,24 @@
         if (gCourseHelper && gCourseHelper.running) { showStatus('刷课助手已在运行'); return; }
         const cfg = getCourseHelperConfig();
         if (!isCoursePage()) { showStatus(errFull(ERR.COURSE_NO_PAGE), true); return; }
-
         const ifr = detectIframe();
         if (!ifr.hasVideo && !ifr.hasVM && document.querySelectorAll('.question-element-node').length === 0) {
-            showToastCard('? 未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
+            showToastCard('⚠ 未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
         }
-
+        gPgEpoch++;
+        gPgSkippedPages.clear();
+        gPgNoAnswerRounds.clear();
+        gPgLastPageId = '';
+        gPgAdvancePageId = '';
+        gPgLastAdvanceAt = 0;
         gCourseHelper = { running: true, timer: null, uiTimer: null };
-        youxueyuan.start();
-        chLog(`刷课助手启动：倍速 ${cfg.rate}×`, 'success');
+        pgRateGuard.start();
+        chLog(`刷课助手启动：倍速 ${cfg.rate}× · 自动答题${cfg.autoAnswer ? '开' : '关'} · 自动翻页${cfg.autoNext ? '开' : '关'}`, 'success');
+        pgLogic();
+        gCourseHelper.timer = setInterval(pgLogic, PG_TICK_MS);
         gCourseHelper.uiTimer = setInterval(() => { if (!gCourseHelper || !gCourseHelper.running) { clearInterval(gCourseHelper.uiTimer); return; } chUpdateStatus(); }, 2000);
         chUpdateStatus();
-        showToastCard(`刷课助手已启动`, `倍速 ${cfg.rate}× · 自动答题/翻页`, '答案源：视图模型 → 本地题库 → 接口', 8000);
+        showToastCard('刷课助手已启动', `倍速 ${cfg.rate}× · 自动答题${cfg.autoAnswer ? '开' : '关'} · 自动翻页${cfg.autoNext ? '开' : '关'}`, '答案源：视图模型 → 本地题库 → 接口', 8000);
         playAlarmBeep({ count: 1, volume: 0.3 });
     }
     function stopCourseHelper() {
@@ -1667,8 +1909,10 @@
         if (gCourseHelper.timer) clearInterval(gCourseHelper.timer);
         if (gCourseHelper.uiTimer) clearInterval(gCourseHelper.uiTimer);
         gCourseHelper = null;
-        try { youxueyuan.stop(); } catch (e) {}
-        try { rateGuard.stop(); } catch (e) {}
+        gPgEpoch++;                       // 作废所有待执行的异步计划，避免旧任务落到新页面
+        gPgQuestionUntil = 0;
+        try { pgRateGuard.stop(); } catch (e) {}
+        try { document.querySelectorAll('video').forEach(v => { try { v.pause(); } catch (e) {} }); } catch (e) {}
         chLog('刷课助手已停止。', 'warn');
         chUpdateStatus();
         showStatus('已停止刷课助手');
@@ -1679,8 +1923,8 @@
         const ifr = detectIframe();
         ac.innerHTML = actionHeader(ACTION_TITLES.course, '课件视频倍速、自动答题、自动翻页与题库') + `
             <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '? 当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
-                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">? 当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
+                ${onPage ? '✓ 当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
+                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">⚠ 当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
             </div>
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
@@ -1691,6 +1935,7 @@
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
                 </div>
+                <div class="dgut-hint" style="margin-bottom:10px;">取不到答案时<b>不会提交</b>，会重试 <b>${PG_MAX_NO_ANSWER_ROUNDS}</b> 轮；视频停滞超过 <b>${Math.round(PG_STALL_MS / 1000)}s</b> 会自动尝试恢复。</div>
                 <div id="dgut-ch-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
                 <div class="dgut-row dgut-row--end">
                     <button id="dgut-ch-save" class="dgut-btn">${icons.settings} 保存设置</button>
@@ -1710,11 +1955,20 @@
             autoNext: ac.querySelector('#dgut-ch-next').checked,
             collectBank: ac.querySelector('#dgut-ch-bank').checked
         });
-        ac.querySelector('#dgut-ch-save').onclick = () => { saveCourseHelperConfig(readCfg()); showStatus('刷课设置已保存'); };
+        ac.querySelector('#dgut-ch-save').onclick = () => { saveCourseHelperConfig(readCfg()); showStatus('刷课设置已保存'); chUpdateStatus(); };
         ac.querySelector('#dgut-ch-start').onclick = () => { saveCourseHelperConfig(readCfg()); startCourseHelper(); };
         ac.querySelector('#dgut-ch-stop').onclick = stopCourseHelper;
         ac.querySelector('#dgut-ch-export').onclick = () => { if (getCourseHelperConfig().collectBank) pgCollectBank(); pgExportBank(); };
         ac.querySelector('#dgut-ch-clear').onclick = pgClearBank;
+        ac.querySelectorAll('#dgut-ch-answer, #dgut-ch-next, #dgut-ch-bank').forEach(cb => {
+            cb.addEventListener('change', () => {
+                saveCourseHelperConfig(readCfg());
+                gPgNextWarned = false;
+                gPgAnswerOffWarned = false;
+                chLog(`开关更新：自动答题${readCfg().autoAnswer ? '开' : '关'} · 自动翻页${readCfg().autoNext ? '开' : '关'}`, 'success');
+                chUpdateStatus();
+            });
+        });
         const rateEl = ac.querySelector('#dgut-ch-rate');
         if (rateEl) {
             let rateTimer = null;
@@ -1735,7 +1989,6 @@
 
     const $ = (typeof unsafeWindow !== 'undefined' && unsafeWindow.jQuery) ? unsafeWindow.jQuery : (typeof jQuery !== 'undefined' ? jQuery : null);
     const jquery = $;
-    const BANK_STORAGE_KEY = 'ulearn_question_bank_local_v1';
 
     (function installUlearnVideoRemoveGuard() {
         try {
@@ -1758,346 +2011,6 @@
             if (typeof chLog === 'function') chLog('[' + tag + '] ' + message, 'muted');
         } catch (e) {}
     }
-
-    function re_text(text) { text = String(text == null ? '' : text).replace(/<\/?.+?\/?>/g, '').replace(/\t/g, "").replace(/\n/g, "").replace(/\r/g, "").replace(/&.*?;/g, ""); return jquery ? jquery.trim(text) : text.trim(); }
-    function triggerMouseSequence(el) { if (!el) return; ["mousedown", "mouseup", "click"].forEach(function (evtName) { try { el.dispatchEvent(new Event(evtName, { bubbles: true, cancelable: true })); } catch (e) { try { const evt = document.createEvent("Event"); evt.initEvent(evtName, true, true); el.dispatchEvent(evt); } catch (innerErr) {} } }); try { if (typeof el.click === "function") el.click(); } catch (e) {} }
-    function splitAnswerOptions(answerArray) { let merged = []; answerArray.forEach(one => { String(one || "").split(/[,\s|，、]+/).filter(Boolean).forEach(part => merged.push(part)); }); return merged; }
-    function optionToIndex(opt) { const m = String(opt || "").toUpperCase().match(/[A-Z]/); return m ? m[0].charCodeAt(0) - 'A'.charCodeAt(0) : -1; }
-    function parseAnswerTextToArray(answerText) { return String(answerText || "").trim().split(/[,\s|，、]+/).map(s => s.trim()).filter(Boolean); }
-    function getKoQuestionModel($questionNode) { try { if (!PAGE_WIN.ko || !$questionNode || $questionNode.length === 0) return null; let node = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); while (node) { const ctx = PAGE_WIN.ko.contextFor ? PAGE_WIN.ko.contextFor(node) : null; if (ctx) { if (ctx.$component && ctx.$component.question) return ctx.$component.question; if (ctx.$data && ctx.$data.question) return ctx.$data.question; if (Array.isArray(ctx.$parents)) for (let i = 0; i < ctx.$parents.length; i++) if (ctx.$parents[i] && ctx.$parents[i].question) return ctx.$parents[i].question; } node = node.parentElement; } } catch (e) {} return null; }
-    function getQuestionComponentVM($questionNode) { try { if (!PAGE_WIN.ko || !$questionNode || $questionNode.length === 0) return null; let node = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); while (node) { const ctx = PAGE_WIN.ko.contextFor ? PAGE_WIN.ko.contextFor(node) : null; if (ctx && ctx.$component && typeof ctx.$component.submitQuestion === "function") return ctx.$component; node = node.parentElement; } } catch (e) {} return null; }
-    function setChoiceSelectedByDataFor($choiceItems, indexList, singleMode) { try { if (!PAGE_WIN.ko || !$choiceItems || $choiceItems.length === 0) return; for (let i = 0; i < $choiceItems.length; i++) { const d = PAGE_WIN.ko.dataFor($choiceItems.get(i)); if (d && typeof d.isSelected === "function") d.isSelected(false); } for (let i = 0; i < indexList.length; i++) { const idx = indexList[i]; if (idx < 0 || idx >= $choiceItems.length) continue; const d = PAGE_WIN.ko.dataFor($choiceItems.get(idx)); if (d && typeof d.isSelected === "function") d.isSelected(true); if (singleMode) break; } } catch (e) {} }
-    function findQuestionModelByIdFromGlobal(questionId) { try { if (!PAGE_WIN.koLearnCourseViewModel || typeof PAGE_WIN.koLearnCourseViewModel.currentPage !== "function") return null; const page = PAGE_WIN.koLearnCourseViewModel.currentPage(); if (!page || typeof page.pageElements !== "function") return null; const pageElements = page.pageElements(); if (!Array.isArray(pageElements)) return null; for (let i = 0; i < pageElements.length; i++) { const pe = pageElements[i]; if (!pe || typeof pe.questions !== "function") continue; const qs = pe.questions(); if (!Array.isArray(qs)) continue; for (let j = 0; j < qs.length; j++) { const q = qs[j]; if (q && typeof q.id === "function" && String(q.id()) === String(questionId)) return q; } } } catch (e) {} return null; }
-    function setKoChoiceSelected(questionModel, indexList, singleMode) { if (!questionModel || typeof questionModel.choices !== "function") return; const choices = questionModel.choices(); if (!Array.isArray(choices) || choices.length === 0) return; for (let i = 0; i < choices.length; i++) if (choices[i] && typeof choices[i].isSelected === "function") choices[i].isSelected(false); for (let i = 0; i < indexList.length; i++) { const idx = indexList[i]; if (idx >= 0 && idx < choices.length && choices[idx] && typeof choices[idx].isSelected === "function") { choices[idx].isSelected(true); if (singleMode) break; } } }
-
-    let BANK_CACHE = null;
-    function loadBankCache() { if (BANK_CACHE) return BANK_CACHE; try { BANK_CACHE = JSON.parse(localStorage.getItem(BANK_STORAGE_KEY)) || []; } catch (e) { BANK_CACHE = []; } return BANK_CACHE; }
-    function saveBankCache() { try { localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(BANK_CACHE || [])); } catch (e) {} }
-    function normalizeAnswerTextByType(qType, answerArray) { const arr = Array.isArray(answerArray) ? answerArray : []; if (arr.length === 0) return ""; if (qType.indexOf("判断") !== -1) { const raw = String(arr[0]).toLowerCase(); if (raw === "true") return "正确"; if (raw === "false") return "错误"; } return arr.map(x => String(x)).join(","); }
-    function buildRecordFromWrapper(w, answerList, answerExplain, sourceTag) {
-        const idAttr = w.getAttribute("id") || "", qid = idAttr.startsWith("question") ? idAttr.substring(8) : idAttr;
-        const sort = re_text((w.querySelector(".question-sort") || {}).textContent || "");
-        const qType = re_text((w.querySelector(".question-type-tag") || {}).textContent || "");
-        const title = re_text((w.querySelector(".question-title-html") || {}).textContent || "");
-        const optionEls = w.querySelectorAll(".choice-list .choice-item"), options = [];
-        for (let j = 0; j < optionEls.length; j++) { const opt = re_text((optionEls[j].querySelector(".option") || {}).textContent || "").replace(/\.$/, ""); const txt = re_text((optionEls[j].querySelector(".text") || {}).textContent || ""); if (opt || txt) options.push((opt ? opt + "." : "") + (txt ? " " + txt : "")); }
-        let answer = Array.isArray(answerList) && answerList.length > 0 ? normalizeAnswerTextByType(qType, answerList) : re_text((w.querySelector(".correct-answer-area span:last-child") || {}).textContent || "");
-        return { qid, sort, qType, title, options, answer, explain: answerExplain || re_text((w.querySelector(".correct-reply-area span:last-child") || {}).textContent || ""), source: sourceTag || "dom", updatedAt: new Date().toISOString() };
-    }
-    function mergeRecordIntoBank(record) {
-        if (!record || !record.title) return;
-        const bank = loadBankCache(), key = record.qid ? "id:" + record.qid : "title:" + record.title;
-        let idx = bank.findIndex(item => (item.qid ? "id:" + item.qid : "title:" + item.title) === key);
-        if (idx === -1) bank.push(record);
-        else bank[idx] = Object.assign({}, bank[idx], record, { options: (record.options && record.options.length > 0) ? record.options : (bank[idx].options || []), answer: record.answer || bank[idx].answer || "", explain: record.explain || bank[idx].explain || "", updatedAt: new Date().toISOString() });
-        saveBankCache();
-    }
-    function getQuestionBankRecords() { const records = [], nodes = document.querySelectorAll(".question-element-node .question-wrapper"); nodes.forEach((w, i) => { const record = buildRecordFromWrapper(w, null, "", "dom"); if (!record.title) return; if (!record.sort) record.sort = String(i + 1); records.push(record); }); return records; }
-    function collectCurrentPageToBank() { getQuestionBankRecords().forEach(mergeRecordIntoBank); }
-    function buildAnswerListForBank(answerData) { if (!answerData || typeof answerData !== "object") return []; if (Array.isArray(answerData.correctAnswerList) && answerData.correctAnswerList.length > 0) return answerData.correctAnswerList.map(x => String(x)); return []; }
-    function collectQuestionNodeToBank($questionNode, answerData, sourceTag) { try { if (!$questionNode || $questionNode.length === 0) return; const w = $questionNode.find('.question-wrapper').get(0) || $questionNode.get(0); if (!w) return; const record = buildRecordFromWrapper(w, buildAnswerListForBank(answerData), String(answerData && (answerData.correctreply || answerData.correctReply) || ""), sourceTag || "auto"); if (record.title) mergeRecordIntoBank(record); } catch (e) {} }
-
-    const rateGuard = {
-        targetRate: 6.0, active: false, resetHistory: [], learnedInterval: 600, enforcementTimer: null, hookedVideos: new WeakSet(), nativeDescriptor: null,
-        _captureDescriptor() { try { this.nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document.createElement('video')), 'playbackRate'); } catch (e) { this.nativeDescriptor = null; } },
-        init() { this.targetRate = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); this._captureDescriptor(); },
-        refreshTarget() { this.targetRate = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); },
-        start() { this.init(); this.active = true; this.resetHistory = []; this.hookAllVideos(); this.scheduleNextEnforcement(); debugLog("RateGuard", "倍速守卫已启动", { target: this.targetRate, interval: this.learnedInterval }); },
-        stop() { this.active = false; if (this.enforcementTimer) { clearTimeout(this.enforcementTimer); this.enforcementTimer = null; } debugLog("RateGuard", "倍速守卫已停止"); },
-        getNativeRate(v) { return this.nativeDescriptor && this.nativeDescriptor.get ? this.nativeDescriptor.get.call(v) : v.playbackRate; },
-        setNativeRate(v, rate) { if (this.nativeDescriptor && this.nativeDescriptor.set) this.nativeDescriptor.set.call(v, rate); else v.playbackRate = rate; },
-        hookAllVideos() { document.querySelectorAll("video").forEach(v => this.hookVideo(v)); },
-        hookVideo(v) {
-            if (this.hookedVideos.has(v)) return; this.hookedVideos.add(v);
-            try {
-                if (!this.nativeDescriptor) return; const self = this;
-                Object.defineProperty(v, 'playbackRate', {
-                    get() { return self.nativeDescriptor.get.call(this); },
-                    set(val) {
-                        if (self.active && Math.abs(val - self.targetRate) > 0.01) {
-                            self.recordReset(Date.now(), val); self.nativeDescriptor.set.call(this, val);
-                            Promise.resolve().then(() => { self.nativeDescriptor.set.call(this, self.targetRate); self.updateSpeedButton(v); });
-                        } else { self.nativeDescriptor.set.call(this, val); }
-                    },
-                    configurable: true, enumerable: true
-                });
-            } catch (e) { debugLog("RateGuard", "setter 重写失败", e.message); }
-            v.addEventListener('ratechange', () => { if (!this.active) return; const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.recordReset(Date.now(), cur); this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } });
-        },
-        recordReset(timestamp) {
-            this.resetHistory.push(timestamp); if (this.resetHistory.length > 20) this.resetHistory.shift();
-            if (this.resetHistory.length >= 3) {
-                const intervals = []; for (let i = 1; i < this.resetHistory.length; i++) intervals.push(this.resetHistory[i] - this.resetHistory[i - 1]);
-                intervals.sort((a, b) => a - b); const median = intervals[Math.floor(intervals.length / 2)];
-                if (median > 100 && median < 30000) this.learnedInterval = Math.min(800, Math.max(200, median - 50));
-            }
-        },
-        updateSpeedButton(v) { if (!$) return; const videos = document.querySelectorAll("video"); const idx = Array.from(videos).indexOf(v); if (idx === -1) return; const speedBtn = $('.mejs__button.mejs__speed-button button').eq(idx); if (speedBtn.length > 0 && speedBtn.text() !== this.targetRate + 'x') speedBtn.text(this.targetRate + 'x'); },
-        scheduleNextEnforcement() { if (!this.active) return; const delay = this.learnedInterval; this.enforcementTimer = setTimeout(() => { this.enforce(); this.scheduleNextEnforcement(); }, delay); },
-        enforce() { if (!this.active) return; this.refreshTarget(); this.hookAllVideos(); document.querySelectorAll("video").forEach(v => { const cur = this.getNativeRate(v); if (Math.abs(cur - this.targetRate) > 0.01) { this.setNativeRate(v, this.targetRate); this.updateSpeedButton(v); } }); }
-    };
-
-    const youxueyuan = {
-        timer: null, questionTaskUntil: 0, pendingTimeouts: [],
-        _schedule(fn, delay) { const id = setTimeout(() => { try { fn(); } finally { this.pendingTimeouts = this.pendingTimeouts.filter(x => x !== id); } }, delay); this.pendingTimeouts.push(id); return id; },
-        _clearPending() { this.pendingTimeouts.forEach(clearTimeout); this.pendingTimeouts = []; },
-        start() {
-            if (this.timer) clearInterval(this.timer); this._clearPending();
-            rateGuard.start();
-            try { this.logic(); } catch (e) { debugLog("VideoError", "启动时执行失败", e.message); }
-            this.timer = setInterval(() => { try { this.logic(); } catch (e) { debugLog("VideoError", "循环执行失败", e.message); } }, 1500);
-        },
-        stop() {
-            rateGuard.stop();
-            if (this.timer) { clearInterval(this.timer); this.timer = null; }
-            this._clearPending();
-            try { if ($) { const $allVideos = $("video"); for (let i = 0; i < $allVideos.length; i++) $allVideos.get(i).pause(); } } catch (e) {}
-        },
-        logic() {
-            if (!$) { debugLog("Youxueyuan", errFull(ERR.COURSE_NO_JQ), null); return; }
-            if ($('.modal.fade.in').length > 0) {
-                switch ($('.modal.fade.in').attr('id')) {
-                    case 'statModal': $("#statModal .btn-hollow").eq(-1).click(); break;
-                    case 'alertModal': $("#alertModal .btn-hollow").length > 0 ? $("#alertModal .btn-hollow").eq(-1).click() : $("#alertModal .btn-submit").click(); break;
-                }
-                return;
-            }
-            if ($('.question-setting-panel').length > 0) {
-                if (Date.now() < this.questionTaskUntil) return;
-                this._clearPending();
-                let parentIdAttr = $('.page-name.active').parent().attr('id');
-                if (!parentIdAttr || parentIdAttr.length < 5) return;
-                let parentId = parentIdAttr.substring(4);
-                let $questions = $('.question-element-node');
-                collectCurrentPageToBank();
-                let totalDelay = 0, hasModelSubmitPlan = false;
-                for (let i = 0; i < $questions.length; i++) {
-                    let $q = $questions.eq(i);
-                    let qDelay = respondent._answer(parentId, $q) || 0;
-                    totalDelay += qDelay + 180;
-                    let $btn = $q.find('.question-operation-wrapper .btn-submit').first();
-                    let qidAttr = $q.find('.question-wrapper').attr('id') || "";
-                    let qid = qidAttr.startsWith("question") ? qidAttr.substring(8) : qidAttr;
-                    const compVmNow = getQuestionComponentVM($q);
-                    const qModelNow = findQuestionModelByIdFromGlobal(qid);
-                    if ((compVmNow && typeof compVmNow.submitQuestion === "function") || (qModelNow && qModelNow.koModel && typeof qModelNow.koModel.submitQuestion === "function")) hasModelSubmitPlan = true;
-                    if ($btn.length > 0) {
-                        this._schedule(() => {
-                            const compVm = getQuestionComponentVM($q);
-                            if (compVm && typeof compVm.submitQuestion === "function") { compVm.submitQuestion(); return; }
-                            const qModel = findQuestionModelByIdFromGlobal(qid);
-                            if (qModel && qModel.koModel && typeof qModel.koModel.submitQuestion === "function") {
-                                try { if (typeof qModel.type === "function" && typeof qModel.answer === "function" && typeof qModel.choices === "function") {
-                                    const qType = qModel.type();
-                                    if ((qType === 1 || qType === 2) && Array.isArray(qModel.choices())) {
-                                        const ans = [], cs = qModel.choices();
-                                        for (let k = 0; k < cs.length; k++) if (cs[k] && typeof cs[k].isSelected === "function" && cs[k].isSelected() && typeof cs[k].option === "function") ans.push(cs[k].option());
-                                        if (ans.length > 0) qModel.answer(ans);
-                                    }
-                                }} catch (e) {}
-                                qModel.koModel.submitQuestion();
-                            } else { triggerMouseSequence($btn.get(0)); }
-                        }, totalDelay);
-                    }
-                }
-                let $globalSubmitBtn = $('.question-operation-area button').eq(0);
-                if (!hasModelSubmitPlan && $globalSubmitBtn.length > 0 && $globalSubmitBtn.text() != '重做') {
-                    this._schedule(() => triggerMouseSequence($globalSubmitBtn.get(0)), totalDelay + 300);
-                }
-                this.questionTaskUntil = Date.now() + totalDelay + 1200;
-                this._schedule(() => $('.next-page-btn.cursor').click(), totalDelay + 900);
-                return;
-            }
-            if ($("video").length > 0) {
-                let $videos = $("video"); let i = 0;
-                for (; i < $videos.length; i++) {
-                    let v = $videos.get(i); let isFinished = v.ended || v.currentTime >= v.duration;
-                    if (!isFinished) { let $finishedNode = $("[data-bind='text: $root.i18nMessageText().finished']").get(i); if ($finishedNode && $($finishedNode).is(':visible')) isFinished = true; }
-                    if (isFinished) continue;
-                    rateGuard.hookVideo(v); rateGuard.refreshTarget();
-                    let _rate = rateGuard.targetRate;
-                    if (rateGuard.getNativeRate(v) !== _rate) rateGuard.setNativeRate(v, _rate);
-                    let speedBtn = $('.mejs__button.mejs__speed-button button').eq(i);
-                    if (speedBtn.length > 0 && speedBtn.text() !== _rate + 'x') speedBtn.text(_rate + 'x');
-                    if (v.paused) { v.muted = true; v.play().catch(() => { let playBtn = $('.mejs__button.mejs__playpause-button button').eq(i); if (playBtn.length > 0) playBtn.click(); }); }
-                    break;
-                }
-                if (i === $videos.length) $('.next-page-btn.cursor').click();
-                return;
-            }
-            $('.next-page-btn.cursor').click();
-        },
-    };
-
-    const ANSWER_CACHE = new Map();
-    const ANSWER_CACHE_TTL = 5 * 60 * 1000;
-    function answerCacheGet(qid) {
-        const e = ANSWER_CACHE.get(String(qid));
-        if (!e) return null;
-        if (Date.now() - e.t > ANSWER_CACHE_TTL) { ANSWER_CACHE.delete(String(qid)); return null; }
-        return e.v;
-    }
-    function answerCacheSet(qid, v) { if (!qid || !v) return; ANSWER_CACHE.set(String(qid), { v, t: Date.now() }); }
-
-    const respondent = {
-        parentId: null, questionId: null, $questionNode: null, questionModel: null, answerDataCache: null,
-        _answer(parentId, $questionNode, callback) {
-            this.parentId = parentId; this.$questionNode = $questionNode;
-            this.questionModel = getKoQuestionModel($questionNode); this.answerDataCache = null;
-            let qidAttr = this.$questionNode.find('.question-wrapper').attr('id');
-            if (this.questionModel && typeof this.questionModel.id === "function") this.questionId = this.questionModel.id();
-            else if (!qidAttr || qidAttr.length <= 8) return;
-            else this.questionId = qidAttr.substring(8);
-            if (this.questionModel && this.questionModel.pageId) this.parentId = this.questionModel.pageId;
-            if (!this.questionModel) { this.questionModel = findQuestionModelByIdFromGlobal(this.questionId); if (this.questionModel && this.questionModel.pageId) this.parentId = this.questionModel.pageId; }
-            let questionType = $questionNode.find('.question-type-tag').text().trim();
-            this.answerDataCache = this._getAnswerData();
-            let answerLen = this.answerDataCache && Array.isArray(this.answerDataCache.correctAnswerList) ? this.answerDataCache.correctAnswerList.length : 0;
-            let resolvedType = this._resolveType(questionType, answerLen);
-            collectQuestionNodeToBank(this.$questionNode, this.answerDataCache, "auto-answer");
-            let waitMs = 120;
-            switch (resolvedType) {
-                case '多选题': waitMs = this._answerMultiSelect(); break;
-                case '单选题': waitMs = this._answerSelect(); break;
-                case '判断题': waitMs = this._answerJudge(); break;
-                case '填空题': waitMs = this._answerInput(); break;
-                case '简答题': waitMs = this._answerSimpleQuestion(); break;
-                case '选词填空': waitMs = this._answerChoicesQuestion(); break;
-                case '排序题': waitMs = this._answerRankQuestion(); break;
-            }
-            if (callback && typeof callback == 'function') callback();
-            return waitMs;
-        },
-        _resolveType(questionType, answerLen) {
-            if (this.$questionNode.find('.blank-input').length > 0) return '填空题';
-            if (this.$questionNode.find('.cloze-input').length > 0) return '选词填空';
-            if (this.$questionNode.find('.answer-blank').length > 0) return '排序题';
-            if (this.$questionNode.find('.choice-btn.right-btn').length > 0) return '判断题';
-            if (this.$questionNode.find('.choice-list .choice-item').length > 0) return answerLen > 1 ? '多选题' : '单选题';
-            return questionType;
-        },
-        _answerMultiSelect() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $choiceItems = this.$questionNode.find('.choice-list .choice-item');
-            let answerArray = splitAnswerOptions(answerData.correctAnswerList);
-            if ($choiceItems.length === 0) return 120;
-            const pickedIdx = [];
-            for (let i = 0; i < answerArray.length; i++) { let index = optionToIndex(answerArray[i]); if (index >= 0 && index < $choiceItems.length) pickedIdx.push(index); }
-            if (!this.questionModel) {
-                let $selectedItems = this.$questionNode.find('.choice-list .choice-item .checkbox.selected').closest('.choice-item');
-                for (let i = 0; i < $selectedItems.length; i++) triggerMouseSequence($selectedItems[i]);
-                for (let i = 0; i < pickedIdx.length; i++) triggerMouseSequence($choiceItems[pickedIdx[i]]);
-            }
-            setChoiceSelectedByDataFor($choiceItems, pickedIdx, false);
-            setKoChoiceSelected(this.questionModel, pickedIdx, false);
-            if (this.questionModel && typeof this.questionModel.answer === "function") {
-                const normalized = answerArray.map(x => String(x).toUpperCase().match(/[A-Z]/)).filter(Boolean).map(m => m[0]);
-                this.questionModel.answer(normalized);
-            }
-            return this.questionModel ? 160 : Math.max(220, answerArray.length * 180 + 120);
-        },
-        _answerSelect() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $choiceItems = this.$questionNode.find('.choice-list .choice-item');
-            let answerArray = splitAnswerOptions(answerData.correctAnswerList);
-            if ($choiceItems.length === 0 || answerArray.length === 0) return 120;
-            let index = optionToIndex(answerArray[0]); if (index < 0 || index >= $choiceItems.length) return 120;
-            setChoiceSelectedByDataFor($choiceItems, [index], true);
-            setKoChoiceSelected(this.questionModel, [index], true);
-            if (!this.questionModel) triggerMouseSequence($choiceItems[index]);
-            if (this.questionModel && typeof this.questionModel.answer === "function") {
-                const opt = String(answerArray[0]).toUpperCase().match(/[A-Z]/);
-                this.questionModel.answer(opt ? [opt[0]] : []);
-            }
-            return this.questionModel ? 120 : 160;
-        },
-        _answerJudge() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData || answerData.correctAnswerList.length === 0) return 120;
-            let questionAnswer = answerData.correctAnswerList[0];
-            if (questionAnswer == "true") triggerMouseSequence(this.$questionNode.find('.choice-btn.right-btn').get(0));
-            else triggerMouseSequence(this.$questionNode.find('.choice-btn.wrong-btn').get(0));
-            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(questionAnswer == "true");
-            return 160;
-        },
-        _answerInput() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $emptyInput = this.$questionNode.find('.blank-input');
-            let inputAnswers = answerData.correctAnswerList, normalized = [];
-            for (let i = 0; i < inputAnswers.length; i++) {
-                let answerText = String(inputAnswers[i] || ""); normalized.push(answerText);
-                let el = $emptyInput.eq(i).get(0); if (!el) continue;
-                el.value = answerText;
-                try { el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {}
-            }
-            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized);
-            return Math.max(180, normalized.length * 120 + 80);
-        },
-        _answerSimpleQuestion() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $emptyInput = this.$questionNode.find('.form-control');
-            let inputAnswers = answerData.correctAnswerList, normalized = [];
-            for (let i = 0; i < inputAnswers.length; i++) {
-                let answerText = re_text(String(inputAnswers[i]).replace(/【答案要点】/g, ''));
-                $emptyInput.eq(i).val(answerText); $emptyInput.change(); normalized.push(answerText);
-            }
-            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized.length > 0 ? normalized[0] : "");
-            return 220;
-        },
-        _answerChoicesQuestion() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $emptyInput = this.$questionNode.find('.cloze-input');
-            let inputAnswers = answerData.subQuestionAnswerDTOList, normalized = [];
-            for (let i = 0; i < inputAnswers.length; i++) {
-                let answerText = inputAnswers[i] && inputAnswers[i].correctAnswerList ? inputAnswers[i].correctAnswerList[0] : "";
-                $emptyInput.eq(i).val(answerText); $emptyInput.change();
-                let el = $emptyInput.eq(i).get(0);
-                if (el) { try { el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {} }
-                normalized.push(answerText);
-            }
-            if (this.questionModel && typeof this.questionModel.answer === "function") this.questionModel.answer(normalized);
-            return Math.max(220, normalized.length * 120 + 80);
-        },
-        _answerRankQuestion() {
-            let answerData = this.answerDataCache || this._getAnswerData(); if (!answerData) return 120;
-            let $emptyInput = this.$questionNode.find('.answer-blank'), inputAnswers = answerData.correctAnswerList;
-            for (let i = 0; i < inputAnswers.length; i++) { $emptyInput.eq(i).html(inputAnswers[i]); $emptyInput.change(); }
-            return 220;
-        },
-        _getAnswerData() {
-            let data = this._syncGetAnswer(); if (!data || typeof data !== "object") data = {};
-            if (!Array.isArray(data.correctAnswerList)) data.correctAnswerList = [];
-            if (!Array.isArray(data.subQuestionAnswerDTOList)) data.subQuestionAnswerDTOList = [];
-            if (data.correctAnswerList.length === 0 && this.questionModel && typeof this.questionModel.correctAnswer === "function") {
-                let koAns = this.questionModel.correctAnswer();
-                if (Array.isArray(koAns) && koAns.length > 0) data.correctAnswerList = koAns.map(x => String(x));
-                else if (typeof koAns === "string" && koAns.trim()) data.correctAnswerList = parseAnswerTextToArray(koAns);
-                else if (typeof koAns === "boolean") data.correctAnswerList = [koAns ? "true" : "false"];
-            }
-            if (data.correctAnswerList.length === 0) {
-                let domAnswerText = this.$questionNode.find('.correct-answer-area span:last-child').first().text().trim();
-                if (domAnswerText) {
-                    if (domAnswerText === "正确") data.correctAnswerList = ["true"];
-                    else if (domAnswerText === "错误") data.correctAnswerList = ["false"];
-                    else data.correctAnswerList = parseAnswerTextToArray(domAnswerText);
-                }
-            }
-            if (data.correctAnswerList.length === 0) return null;
-            return data;
-        },
-        _syncGetAnswer() {
-            const cached = answerCacheGet(this.questionId);
-            if (cached) return cached;
-            const apiHost = window.location.hostname.includes("dgut.edu.cn") ? "https://ua.dgut.edu.cn" : "https://api.ulearning.cn";
-            const reqUrl = apiHost + '/uaapi/questionAnswer/' + this.questionId + '?parentId=' + (this.parentId || '');
-            GM_xmlhttpRequest({
-                method: 'GET', url: reqUrl, timeout: 8000,
-                onload: (res) => {
-                    try { const d = JSON.parse(res.responseText); if (d) answerCacheSet(this.questionId, d); } catch (e) {}
-                }
-            });
-            return null;
-        }
-    };
 
     /* ============================================================
      * 作业互评
@@ -2690,6 +2603,7 @@ ${signaturesHtml(signatures)}
             ctx.lineJoin = 'round';
             ctx.strokeStyle = '#1D1B20';
         };
+        canvas.__dgutPadResize = resize;   // 面板缩放时重新同步画板分辨率
         resize();
         let drawing = false, lastX = 0, lastY = 0;
         const pos = (e) => {
@@ -4056,7 +3970,7 @@ self.onmessage = function (e) {
     /* ============================================================
      * 详情页
      * ============================================================ */
-    const ABOUT_VERSION = 'v5.6.0';
+    const ABOUT_VERSION = 'v5.7.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     function renderDetailView(ac) {
@@ -4171,15 +4085,185 @@ self.onmessage = function (e) {
     /* ============================================================
      * 面板与悬浮按钮
      * ============================================================ */
+    /* ---------------- 面板：可调大小 / Ctrl+滚轮缩放 / 布局持久化 ---------------- */
+    const PANEL_DEFAULT_W = 780, PANEL_DEFAULT_H = 620;
+    const PANEL_MIN_W = 380, PANEL_MIN_H = 280;
+    const PANEL_ZOOM_MIN = 0.6, PANEL_ZOOM_MAX = 2.2, PANEL_ZOOM_STEP = 0.1;
+    let gPanelZoomTimer = null;
+
+    function panelNum(v, d) { const n = parseFloat(v); return isFinite(n) ? n : d; }
+    function panelLayoutOf(raw) {
+        const o = (raw && typeof raw === 'object') ? raw : {};
+        const zoom = panelNum(o.zoom, 1);
+        return {
+            left: (typeof o.left === 'number' && isFinite(o.left)) ? o.left : null,
+            top: (typeof o.top === 'number' && isFinite(o.top)) ? o.top : null,
+            width: panelNum(o.width, PANEL_DEFAULT_W),
+            height: panelNum(o.height, PANEL_DEFAULT_H),
+            zoom: Math.min(PANEL_ZOOM_MAX, Math.max(PANEL_ZOOM_MIN, zoom))
+        };
+    }
+    function panelLayout() { return panelLayoutOf(GM_getValue(UI_POS_KEY, null)); }
+    function panelZoomOf(p) {
+        const z = panelNum(p && p.dataset ? p.dataset.zoom : 1, 1);
+        return z > 0 ? z : 1;
+    }
+    function panelStateOf(p) {
+        if (!p || !p.style) return panelLayout();
+        return {
+            left: p.style.left && p.style.left !== 'auto' ? panelNum(p.style.left, null) : null,
+            top: p.style.top && p.style.top !== 'auto' ? panelNum(p.style.top, null) : null,
+            width: panelNum(p.style.width, PANEL_DEFAULT_W),
+            height: panelNum(p.style.height, PANEL_DEFAULT_H),
+            zoom: panelZoomOf(p)
+        };
+    }
+    function savePanelState(patch) {
+        const p = document.getElementById('dgut-main-panel');
+        const base = p ? panelStateOf(p) : panelLayout();
+        GM_setValue(UI_POS_KEY, Object.assign({}, base, patch || {}));
+    }
+    /* 宽高永远不超过浏览器可视区域（缩放后按视觉尺寸换算） */
+    function panelClampBox(p) {
+        p = p || document.getElementById('dgut-main-panel');
+        if (!p) return;
+        const z = panelZoomOf(p);
+        const vw = Math.max(PANEL_MIN_W, window.innerWidth || PANEL_DEFAULT_W);
+        const vh = Math.max(PANEL_MIN_H, window.innerHeight || PANEL_DEFAULT_H);
+        const maxW = Math.max(PANEL_MIN_W, Math.floor((vw - 8) / z));
+        const maxH = Math.max(PANEL_MIN_H, Math.floor((vh - 8) / z));
+        const w = Math.min(maxW, Math.max(PANEL_MIN_W, panelNum(p.style.width, PANEL_DEFAULT_W)));
+        const h = Math.min(maxH, Math.max(PANEL_MIN_H, panelNum(p.style.height, PANEL_DEFAULT_H)));
+        p.style.width = Math.round(w) + 'px';
+        p.style.height = Math.round(h) + 'px';
+        if (p.style.left && p.style.left !== 'auto') {
+            const l = panelNum(p.style.left, 0);
+            p.style.left = Math.round(Math.max(0, Math.min(Math.max(0, vw - w * z), l))) + 'px';
+        }
+        if (p.style.top && p.style.top !== 'auto') {
+            const t = panelNum(p.style.top, 0);
+            p.style.top = Math.round(Math.max(0, Math.min(Math.max(0, vh - h * z), t))) + 'px';
+        }
+    }
+    function panelShowZoom(p, z) {
+        const badge = p.querySelector('#dgut-panel-zoom-badge');
+        if (!badge) return;
+        badge.textContent = Math.round(z * 100) + '%';
+        badge.style.opacity = '1';
+        if (gPanelZoomTimer) clearTimeout(gPanelZoomTimer);
+        gPanelZoomTimer = setTimeout(() => { try { badge.style.opacity = '0'; } catch (e) {} }, 1400);
+    }
+    function panelApplyZoom(z) {
+        const p = document.getElementById('dgut-main-panel');
+        if (!p) return;
+        z = Math.min(PANEL_ZOOM_MAX, Math.max(PANEL_ZOOM_MIN, Math.round(z * 100) / 100));
+        p.dataset.zoom = String(z);
+        p.style.transformOrigin = '0 0';
+        p.style.transform = (z === 1) ? '' : ('scale(' + z + ')');
+        panelClampBox(p);
+        panelShowZoom(p, z);
+        /* 画板等按 rect 计算的元素需要按新尺寸重建 */
+        try { const sig = document.getElementById('dgut-sig-canvas'); if (sig && typeof sig.__dgutPadResize === 'function') sig.__dgutPadResize(); } catch (e) {}
+    }
+    function panelEnableInteractions(panel) {
+        const header = panel.querySelector('#dgut-panel-header');
+        let drag = null;
+        header.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#dgut-panel-close') || e.target.closest('.dgut-resizer')) return;
+            const rect = panel.getBoundingClientRect();
+            drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+            panel.style.right = 'auto'; panel.style.bottom = 'auto';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!drag) return;
+            const z = panelZoomOf(panel);
+            const w = panelNum(panel.style.width, PANEL_DEFAULT_W) * z;
+            const h = panelNum(panel.style.height, PANEL_DEFAULT_H) * z;
+            const maxX = Math.max(0, window.innerWidth - w);
+            const maxY = Math.max(0, window.innerHeight - Math.min(h, 120));
+            panel.style.left = Math.round(Math.max(0, Math.min(maxX, e.clientX - drag.dx))) + 'px';
+            panel.style.top = Math.round(Math.max(0, Math.min(maxY, e.clientY - drag.dy))) + 'px';
+        });
+        document.addEventListener('mouseup', () => {
+            if (!drag) return;
+            drag = null;
+            savePanelState(panelStateOf(panel));
+        });
+        /* 双击标题栏：缩放回到 100% */
+        header.addEventListener('dblclick', (e) => {
+            if (e.target.closest('#dgut-panel-close') || e.target.closest('.dgut-resizer')) return;
+            panelApplyZoom(1);
+            savePanelState(panelStateOf(panel));
+        });
+        /* 八向中的五向拖拽边框（右/下/左/上/右下角） */
+        panel.querySelectorAll('.dgut-resizer').forEach(handle => {
+            handle.addEventListener('mousedown', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                const dir = handle.dataset.dir || 'se';
+                const z = panelZoomOf(panel);
+                const rect = panel.getBoundingClientRect();
+                panel.style.right = 'auto'; panel.style.bottom = 'auto';
+                panel.style.left = Math.round(rect.left) + 'px';
+                panel.style.top = Math.round(rect.top) + 'px';
+                const st = {
+                    dir: dir, x: e.clientX, y: e.clientY,
+                    w: panelNum(panel.style.width, PANEL_DEFAULT_W),
+                    h: panelNum(panel.style.height, PANEL_DEFAULT_H),
+                    l: rect.left, t: rect.top
+                };
+                const onMove = (ev) => {
+                    const dx = (ev.clientX - st.x) / z, dy = (ev.clientY - st.y) / z;
+                    let w = st.w, h = st.h, l = st.l, t = st.t;
+                    if (st.dir.indexOf('e') !== -1) w = st.w + dx;
+                    if (st.dir.indexOf('s') !== -1) h = st.h + dy;
+                    if (st.dir.indexOf('w') !== -1) { w = st.w - dx; l = st.l + dx; }
+                    if (st.dir.indexOf('n') !== -1) { h = st.h - dy; t = st.t + dy; }
+                    if (w < PANEL_MIN_W) { if (st.dir.indexOf('w') !== -1) l -= (PANEL_MIN_W - w); w = PANEL_MIN_W; }
+                    if (h < PANEL_MIN_H) { if (st.dir.indexOf('n') !== -1) t -= (PANEL_MIN_H - h); h = PANEL_MIN_H; }
+                    if (l < 0) { if (st.dir.indexOf('w') !== -1) w = Math.max(PANEL_MIN_W, w + l); l = 0; }
+                    if (t < 0) { if (st.dir.indexOf('n') !== -1) h = Math.max(PANEL_MIN_H, h + t); t = 0; }
+                    const maxW = Math.max(PANEL_MIN_W, (window.innerWidth - 8) / z - l);
+                    const maxH = Math.max(PANEL_MIN_H, (window.innerHeight - 8) / z - t);
+                    w = Math.min(maxW, Math.max(PANEL_MIN_W, w));
+                    h = Math.min(maxH, Math.max(PANEL_MIN_H, h));
+                    panel.style.width = Math.round(w) + 'px';
+                    panel.style.height = Math.round(h) + 'px';
+                    panel.style.left = Math.round(l) + 'px';
+                    panel.style.top = Math.round(t) + 'px';
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    savePanelState(panelStateOf(panel));
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        });
+        /* Ctrl + 滚轮：整体缩放文字与元素（等价于面板级 zoom） */
+        panel.addEventListener('wheel', (e) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const step = (e.deltaY < 0 ? 1 : -1) * PANEL_ZOOM_STEP;
+            panelApplyZoom(panelZoomOf(panel) + step);
+            savePanelState(panelStateOf(panel));
+        }, { passive: false });
+    }
     function createPanel() {
         if (document.getElementById('dgut-main-panel')) return;
-        const pos = GM_getValue(UI_POS_KEY, null);
+        const layout = panelLayout();
         const panel = document.createElement('div');
         panel.id = 'dgut-main-panel';
-        if (pos && pos.left !== undefined) {
-            const pw = 780, ph = 600;
-            panel.style.left = Math.max(0, Math.min(Math.max(0, window.innerWidth - pw), pos.left)) + 'px';
-            panel.style.top = Math.max(0, Math.min(Math.max(0, window.innerHeight - ph), pos.top)) + 'px';
+        panel.style.width = Math.round(layout.width) + 'px';
+        panel.style.height = Math.round(layout.height) + 'px';
+        panel.dataset.zoom = String(layout.zoom);
+        panel.style.transformOrigin = '0 0';
+        if (layout.zoom !== 1) panel.style.transform = 'scale(' + layout.zoom + ')';
+        if (layout.left !== null) {
+            panel.style.left = Math.max(0, layout.left) + 'px';
+            panel.style.top = Math.max(0, layout.top === null ? 16 : layout.top) + 'px';
         } else { panel.style.right = '16px'; panel.style.bottom = '16px'; }
         panel.innerHTML = `
             <div id="dgut-panel-header">
@@ -4213,29 +4297,20 @@ self.onmessage = function (e) {
                 </div>
             </div>`;
         document.body.appendChild(panel);
-        const header = panel.querySelector('#dgut-panel-header');
-        let drag = null;
-        header.addEventListener('mousedown', (e) => {
-            if (e.target.closest('#dgut-panel-close')) return;
-            const rect = panel.getBoundingClientRect();
-            drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
-            panel.style.right = 'auto'; panel.style.bottom = 'auto';
-            e.preventDefault();
+        /* 改变大小用的拖拽边框 + 缩放比例提示 */
+        ['n', 's', 'w', 'e', 'se'].forEach(dir => {
+            const grip = document.createElement('div');
+            grip.className = 'dgut-resizer';
+            grip.id = 'dgut-panel-resizer-' + dir;
+            grip.dataset.dir = dir;
+            grip.title = '拖拽调整面板大小';
+            panel.appendChild(grip);
         });
-        document.addEventListener('mousemove', (e) => {
-            if (!drag) return;
-            const pw = panel.offsetWidth || 780, ph = panel.offsetHeight || 600;
-            const maxX = Math.max(0, window.innerWidth - pw);
-            const maxY = Math.max(0, window.innerHeight - Math.min(ph, 120));
-            panel.style.left = Math.max(0, Math.min(maxX, e.clientX - drag.dx)) + 'px';
-            panel.style.top = Math.max(0, Math.min(maxY, e.clientY - drag.dy)) + 'px';
-        });
-        document.addEventListener('mouseup', () => {
-            if (!drag) return;
-            drag = null;
-            const rect = panel.getBoundingClientRect();
-            GM_setValue(UI_POS_KEY, { left: rect.left, top: rect.top });
-        });
+        const zoomBadge = document.createElement('div');
+        zoomBadge.id = 'dgut-panel-zoom-badge';
+        panel.appendChild(zoomBadge);
+        panelEnableInteractions(panel);
+        panelClampBox(panel);
         panel.querySelector('#dgut-panel-close').onclick = () => togglePanel();
         panel.querySelectorAll('.dgut-nav[data-action]').forEach(t => t.onclick = () => {
             GM_setValue(VIEW_MODE_KEY, t.dataset.action);
@@ -4321,13 +4396,31 @@ self.onmessage = function (e) {
         document.getElementById('dgut-mini-panel')?.remove();
         createMiniPanel();
         if (GM_getValue(PANEL_OPEN_KEY, false)) createPanel();
-        showToastCard(`${KAO.ok} 位置已重置`, '面板与悬浮面板位置已恢复默认（右下角）。', '', 4000);
+        showToastCard(`${KAO.ok} 布局已重置`, '面板位置、大小与缩放已恢复默认（右下角 780×620、100%）。', '', 4000);
+    }
+
+    function resetPanelSize() {
+        const p = document.getElementById('dgut-main-panel');
+        if (!p) {
+            GM_setValue(UI_POS_KEY, Object.assign(panelLayout(), { width: PANEL_DEFAULT_W, height: PANEL_DEFAULT_H, zoom: 1 }));
+            showStatus('面板大小已重置（下次打开生效）');
+            return;
+        }
+        p.dataset.zoom = '1';
+        p.style.transform = '';
+        p.style.width = PANEL_DEFAULT_W + 'px';
+        p.style.height = PANEL_DEFAULT_H + 'px';
+        p.style.right = 'auto'; p.style.bottom = 'auto';
+        panelClampBox(p);
+        savePanelState(panelStateOf(p));
+        showToastCard('面板大小已重置', `恢复默认 ${PANEL_DEFAULT_W}×${PANEL_DEFAULT_H}、缩放 100%。`, '', 4000);
     }
 
     function init() {
         initThemeWatcher();
         GM_registerMenuCommand('打开/关闭主面板', () => togglePanel());
         GM_registerMenuCommand('重置面板/悬浮面板位置', resetPanelPositions);
+        GM_registerMenuCommand('重置面板大小与缩放', resetPanelSize);
         GM_registerMenuCommand('优学院课程签到', () => openActionView('sign'));
         GM_registerMenuCommand('优学院刷课助手', () => openActionView('course'));
         GM_registerMenuCommand('作业互评记录', () => openActionView('peer'));
@@ -4338,6 +4431,7 @@ self.onmessage = function (e) {
         GM_registerMenuCommand('外观设置（主题/主体色）', () => openActionView('appearance'));
         GM_registerMenuCommand('详情（简介与错误码）', () => openActionView('detail'));
 
+        window.addEventListener('resize', () => { try { panelClampBox(); } catch (e) {} });
         createMiniPanel();
         if (GM_getValue(PANEL_OPEN_KEY, false)) createPanel();
     }
