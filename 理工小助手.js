@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.7.0
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @version      5.7.1
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -1271,7 +1271,10 @@
     const PG_ADVANCE_COOLDOWN_MS = 2500;     // 两次翻页最短间隔
     const PG_SAME_PAGE_GUARD_MS = 10000;     // 同一页重复翻页保护
     const PG_STALL_MS = 12000;               // 播放停滞判定阈值
-    const PG_MAX_NO_ANSWER_ROUNDS = 6;       // 取不到答案的重试轮次上限
+    const PG_HEALTHY_MS = 20000;             // 连续正常播放多久才重置恢复计数
+    const PG_MAX_RECOVER_STEPS = 4;          // 恢复阶梯步数（4=刷新页面）
+    const PG_MAX_NO_ANSWER_ROUNDS = 40;      // 取不到答案的重试轮次上限
+    const PG_NO_ANSWER_BUDGET_MS = 90000;    // 同一页最多重试时长（给慢接口/慢渲染留足时间）
     const PG_SKIP_TTL_MS = 30 * 60 * 1000;   // 跳过页面的记忆时长
     const PG_ANSWER_TTL_MS = 5 * 60 * 1000;  // 答案缓存时长
 
@@ -1282,16 +1285,59 @@
     function pgReText(text) { return String(text || '').replace(/<\/?.+?\/?>/g, '').replace(/[\t\n\r]/g, '').replace(/&.*?;/g, '').trim(); }
     function pgTriggerMouseSequence(el) { if (!el) return; ['mousedown', 'mouseup', 'click'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) {} }); try { if (typeof el.click === 'function') el.click(); } catch (e) {} }
     function pgLog(tag, message, detail) { try { if (typeof debugLog === 'function') debugLog(tag, message, detail); } catch (e) {} }
+    /* 运行日志：内存 + GM 双备份，关闭/重开面板、切换视图、刷新页面后都不会丢 */
+    const CH_LOG_MAX = 400;
+    const CH_LOG_KEY = 'dgut_course_log';
+    let gChLogLines = null;
+    let gChLogSaveTimer = null;
+    function chLogBuffer() {
+        if (!gChLogLines) {
+            try {
+                const saved = GM_getValue(CH_LOG_KEY, null);
+                gChLogLines = Array.isArray(saved) ? saved.slice(-CH_LOG_MAX) : [];
+            } catch (e) { gChLogLines = []; }
+        }
+        return gChLogLines;
+    }
+    function chLogLineEl(rec) {
+        const div = document.createElement('div');
+        div.className = `dgut-log-line log-${(rec && rec.level) || 'info'}`;
+        div.textContent = `[${(rec && rec.t) || ''}] ${(rec && rec.text) || ''}`;
+        return div;
+    }
+    function chLogSave() {
+        if (gChLogSaveTimer) return;
+        gChLogSaveTimer = setTimeout(() => {
+            gChLogSaveTimer = null;
+            try { GM_setValue(CH_LOG_KEY, chLogBuffer().slice(-CH_LOG_MAX)); } catch (e) {}
+        }, 500);
+    }
+    /* 视图（重新）渲染后把历史日志补回 DOM —— 修复「关掉面板再打开日志消失」 */
+    function chLogRestore() {
+        const el = document.getElementById('dgut-ch-log');
+        if (!el) return;
+        while (el.firstChild) el.removeChild(el.firstChild);
+        chLogBuffer().forEach(rec => el.appendChild(chLogLineEl(rec)));
+        el.scrollTop = el.scrollHeight;
+    }
+    function chLogClear() {
+        gChLogLines = [];
+        try { GM_setValue(CH_LOG_KEY, []); } catch (e) {}
+        const el = document.getElementById('dgut-ch-log');
+        if (el) while (el.firstChild) el.removeChild(el.firstChild);
+    }
     function chLog(text, level = 'info') {
+        const rec = { t: new Date().toLocaleTimeString('zh-CN'), text: String(text), level: level || 'info' };
+        const buf = chLogBuffer();
+        buf.push(rec);
+        while (buf.length > CH_LOG_MAX) buf.shift();
         const el = document.getElementById('dgut-ch-log');
         if (el) {
-            const div = document.createElement('div');
-            div.className = `dgut-log-line log-${level || 'info'}`;
-            div.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${text}`;
-            el.appendChild(div);
-            while (el.childElementCount > 400) el.removeChild(el.firstChild);
+            el.appendChild(chLogLineEl(rec));
+            while (el.childElementCount > CH_LOG_MAX) el.removeChild(el.firstChild);
             el.scrollTop = el.scrollHeight;
         }
+        chLogSave();
         log('[刷课]', text);
     }
     function pgRequestJson(url) {
@@ -1451,37 +1497,86 @@
         return null;
     }
     function pgResolveType(node, tag, answerLen) {
+        const t = String(tag || '');
         if (node.querySelector('.blank-input')) return '填空题';
         if (node.querySelector('.cloze-input')) return '选词填空';
         if (node.querySelector('.answer-blank')) return '排序题';
-        if (node.querySelector('.choice-btn.right-btn')) return '判断题';
+        if (node.querySelector('.choice-btn.right-btn') || node.querySelector('.choice-btn.wrong-btn')) return '判断题';
         if (node.querySelector('.choice-list .choice-item')) {
-            if (Number(answerLen) > 1 || /多选/.test(String(tag || ''))) return '多选题';
+            if (Number(answerLen) > 1 || /多选|多项|不定项/.test(t)) return '多选题';
             return '单选题';
         }
-        if (node.querySelector('.form-control')) return '简答题';
-        return tag || '未知';
+        if (node.querySelector('.form-control, textarea, [contenteditable="true"]')) {
+            if (/简答|问答|论述|分析/.test(t)) return '简答题';
+            return '填空题';
+        }
+        /* 题型标签兜底：样式类名对不上时按文字判断，避免整题被漏掉 */
+        if (/判断/.test(t)) return '判断题';
+        if (/多选|多项|不定项/.test(t)) return '多选题';
+        if (/单选/.test(t)) return '单选题';
+        if (/填空|完形/.test(t)) return '填空题';
+        if (/简答|问答|论述|分析/.test(t)) return '简答题';
+        if (/排序|连线|匹配/.test(t)) return '排序题';
+        return t || '未知';
+    }
+    /* 答案归一化：判断题→true/false；多选题把 "AB" / "A、B" 这类合并写法拆成单个选项 */
+    function pgNormalizeAnswers(type, list) {
+        const raw = Array.isArray(list) ? list : [list];
+        const multi = type === '多选题' || /多选|多项|不定项/.test(String(type || ''));
+        const out = [];
+        raw.forEach(item => {
+            if (item === null || item === undefined) return;
+            const s = String(item).trim();
+            if (!s) return;
+            if (type === '判断题' || /判断/.test(String(type || ''))) {
+                const low = s.toLowerCase();
+                const yes = low === 'true' || low === 't' || low === 'yes' || low === 'y' || low === 'a' || low === '1'
+                    || s === '正确' || s === '对' || s === '是' || s === '√' || s === '✓';
+                out.push(yes ? 'true' : 'false');
+                return;
+            }
+            if (multi) {
+                if (/^[A-Za-z]{2,}$/.test(s)) { s.split('').forEach(c => out.push(c.toUpperCase())); return; }
+                s.split(/[,\s|，、;；/]+/).filter(Boolean).forEach(p => out.push(p.toUpperCase()));
+                return;
+            }
+            if (type === '单选题') { const m = s.toUpperCase().match(/[A-Z]/); out.push(m ? m[0] : s); return; }
+            out.push(s);   // 填空/选词/简答/排序：保持原文，不能按空格拆（英文答案本身含空格）
+        });
+        return out.length ? out : out;
     }
     function pgApplyAnswer(node, type, answers) {
         if (!answers || !answers.length) return false;
         const w = node.querySelector('.question-wrapper') || node;
         if (type === '判断题') {
-            const val = String(answers[0]).toLowerCase();
-            const isTrue = val === 'true' || val === '正确' || val === '对' || val === '1' || val === 'a';
+            const s = String(answers[0]).trim();
+            const low = s.toLowerCase();
+            const isTrue = low === 'true' || low === 't' || low === 'yes' || low === 'y' || low === 'a' || low === '1'
+                || s === '正确' || s === '对' || s === '是' || s === '√' || s === '✓';
             const btn = w.querySelector(isTrue ? '.choice-btn.right-btn' : '.choice-btn.wrong-btn');
             if (btn) { pgTriggerMouseSequence(btn); return true; }
             return false;
         }
         if (type === '单选题' || type === '多选题') {
             const items = Array.from(w.querySelectorAll('.choice-list .choice-item'));
-            const idxs = answers.map(a => { const m = String(a).toUpperCase().match(/[A-Z]/); return m ? m[0].charCodeAt(0) - 65 : -1; }).filter(i => i >= 0 && i < items.length);
+            if (!items.length) return false;
+            const idxs = [];
+            answers.forEach(a => {
+                const m = String(a).toUpperCase().match(/[A-Z]/);
+                if (m) { const i = m[0].charCodeAt(0) - 65; if (i >= 0 && i < items.length && idxs.indexOf(i) === -1) idxs.push(i); }
+            });
             const target = type === '多选题' ? idxs : (idxs.length ? [idxs[0]] : []);
             if (!target.length) return false;
-            target.forEach(i => { try { const cb = items[i].querySelector('.checkbox'); if (cb) cb.classList.add('selected'); } catch (e) {} pgTriggerMouseSequence(items[i]); });
+            target.forEach(i => {
+                try { const cb = items[i].querySelector('.checkbox, .radio'); if (cb) cb.classList.add('selected'); } catch (e) {}
+                try { items[i].classList.add('selected'); } catch (e) {}
+                pgTriggerMouseSequence(items[i]);
+            });
             return true;
         }
         if (type === '填空题' || type === '选词填空') {
-            const inputs = Array.from(w.querySelectorAll('.blank-input, .cloze-input, .answer-width input, .answer-width'));
+            const inputs = Array.from(w.querySelectorAll('.blank-input, .cloze-input, .answer-width input, .answer-width, input[type="text"], textarea, [contenteditable="true"]'));
+            if (!inputs.length) return false;
             answers.forEach((a, i) => {
                 const el = inputs[i]; if (!el) return;
                 if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
@@ -1489,19 +1584,40 @@
                     try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
                 } else { el.textContent = a; try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} }
             });
-            return inputs.length > 0;
+            return true;
         }
         if (type === '简答题') {
-            const inputs = Array.from(w.querySelectorAll('.form-control, textarea'));
-            answers.forEach((a, i) => { if (inputs[i]) { inputs[i].value = a; try { inputs[i].dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} } });
-            return inputs.length > 0;
+            const inputs = Array.from(w.querySelectorAll('.form-control, textarea, [contenteditable="true"]'));
+            if (!inputs.length) return false;
+            answers.forEach((a, i) => {
+                const el = inputs[i]; if (!el) return;
+                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                    el.value = a;
+                    try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+                } else { el.textContent = a; try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} }
+            });
+            return true;
         }
         if (type === '排序题') {
             const blanks = Array.from(w.querySelectorAll('.answer-blank'));
+            if (!blanks.length) return false;
             answers.forEach((a, i) => { if (blanks[i]) { blanks[i].innerHTML = a; try { blanks[i].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} } });
-            return blanks.length > 0;
+            return true;
         }
         return false;
+    }
+    /* 题型识别不准时的兜底：按序尝试所有填充方式，尽最大可能不把题目漏掉 */
+    function pgTryFill(node, type, answers) {
+        const tried = {};
+        const attempt = (t) => {
+            if (!t || tried[t]) return false;
+            tried[t] = 1;
+            try { return !!pgApplyAnswer(node, t, answers); } catch (e) { return false; }
+        };
+        if (attempt(type)) return type;
+        const order = ['多选题', '单选题', '判断题', '填空题', '选词填空', '简答题', '排序题'];
+        for (const t of order) { if (attempt(t)) return t; }
+        return '';
     }
     function pgSubmitQuestion(node) {
         const comp = pgGetQuestionComponentVM(node);
@@ -1578,6 +1694,7 @@
     let gPgAnswerOffWarned = false;
     const gPgSkippedPages = new Map();     // 页面 key -> 跳过时间
     const gPgNoAnswerRounds = new Map();   // 页面 key -> 连续取不到答案的轮次
+    const gPgRetrySince = new Map();       // 页面 key -> 本轮重试开始时间
 
     function pgPageId() {
         const a = document.querySelector('.page-name.active');
@@ -1615,6 +1732,7 @@
     }
     function pgTouchPageDwell() {
         const pid = pgPageId();
+        if (!pid) return gPgLastPageId;      // 暂时取不到页名（DOM 抖动）不算换页，避免打断答题
         if (pid !== gPgLastPageId) {
             gPgLastPageId = pid; gPgPageChangeAt = Date.now();
             gPgEpoch++;                 // 页面已切换：作废上一页遗留的异步计划
@@ -1622,6 +1740,7 @@
             gPgEndWarned = false;
             gPgNextWarned = false;
             gPgNoAnswerRounds.delete(pid);
+            gPgRetrySince.delete(pid);
         }
         return pid;
     }
@@ -1695,7 +1814,7 @@
     const pgVideoStates = new WeakMap();
     function pgVideoState(v) {
         let s = pgVideoStates.get(v);
-        if (!s) { s = { ct: -1, progressAt: Date.now(), attempts: 0, lastActAt: 0, reloads: 0 }; pgVideoStates.set(v, s); }
+        if (!s) { s = { ct: -1, progressAt: Date.now(), attempts: 0, lastActAt: 0, reloads: 0, healthySince: 0, gaveUp: false }; pgVideoStates.set(v, s); }
         return s;
     }
     function pgVideoBroken(v) {
@@ -1707,9 +1826,18 @@
         const now = Date.now();
         const s = pgVideoState(v);
         let ct = 0; try { ct = Number(v.currentTime) || 0; } catch (e) {}
-        if (Math.abs(ct - s.ct) > 0.25) { s.ct = ct; s.progressAt = now; s.attempts = 0; return; }   // 有进度，健康
         let dur = 0; try { dur = Number(v.duration) || 0; } catch (e) {}
-        if (dur > 0 && ct >= dur - 0.3) { s.progressAt = now; s.attempts = 0; return; }             // 已播完
+        const atEnd = dur > 0 && ct >= dur - 0.3;
+        if (!atEnd && Math.abs(ct - s.ct) > 0.25) {
+            /* 有进展：只有「持续正常播放」足够久才清零恢复计数，
+               否则轻微缓冲/恢复动作本身造成的时间轴跳动会让计数永远停在 1 */
+            s.ct = ct; s.progressAt = now;
+            if (!s.healthySince) s.healthySince = now;
+            if (now - s.healthySince >= PG_HEALTHY_MS) { s.attempts = 0; s.lastActAt = 0; s.healthySince = 0; }
+            return;
+        }
+        s.healthySince = 0;
+        if (atEnd) { s.progressAt = now; s.attempts = 0; return; }             // 已播完
         if (v.seeking) { s.progressAt = now; return; }
         const stallFor = now - s.progressAt;
         const broken = pgVideoBroken(v) || ((typeof v.readyState === 'number' && v.readyState === 0) && stallFor > 8000);
@@ -1717,14 +1845,14 @@
         if (now - s.lastActAt < 5000) return;                       // 恢复动作节流，避免抖动
         s.lastActAt = now; s.attempts++;
         const why = broken ? '媒体加载失败 / 无可用源' : ('播放停滞 ' + Math.round(stallFor / 1000) + 's');
-        chLog('视频异常（' + why + '），执行第 ' + s.attempts + ' 次恢复…', 'warn');
+        chLog('视频异常（' + why + '），执行第 ' + s.attempts + '/' + PG_MAX_RECOVER_STEPS + ' 次恢复…', 'warn');
         try {
             const rate = pgRateGuard.target;
             if (s.attempts === 1) {
                 v.muted = true;
                 try { if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate); } catch (e) {}
                 const p = v.play(); if (p && p.catch) p.catch(() => {});
-                try { v.currentTime = ct + 0.5; } catch (e) {}
+                try { v.currentTime = ct + 0.5; s.ct = ct + 0.5; } catch (e) {}   // 记录自身微调，避免被误判为「有进展」
             } else if (s.attempts === 2) {
                 const idx = Array.from(document.querySelectorAll('video')).indexOf(v);
                 const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[idx];
@@ -1732,6 +1860,7 @@
                 else { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
             } else if (s.attempts === 3) {
                 try { v.load(); } catch (e) {}
+                try { s.ct = Number(v.currentTime) || 0; } catch (e) {}
                 const p = v.play(); if (p && p.catch) p.catch(() => {});
             } else {
                 const key = 'dgut_pg_reload_' + (pgPageId() || 'page');
@@ -1751,7 +1880,13 @@
         } catch (e) {}
     }
 
-    /* ---------------- 自动答题（异步、幂等、取不到答案不提交） ---------------- */
+    /* ---------------- 自动答题（异步、幂等、取不到答案不提交、尽可能不漏题） ---------------- */
+    /* 题目节点：优先 .question-element-node；某些页面没有该层时退回到 .question-wrapper */
+    function pgQuestionNodes() {
+        let nodes = Array.from(document.querySelectorAll('.question-element-node'));
+        if (!nodes.length) nodes = Array.from(document.querySelectorAll('.question-wrapper'));
+        return nodes.filter(n => n && n.nodeType === 1);
+    }
     async function pgAnswerAll() {
         if (gPgAnswering) return;
         const cfg = getCourseHelperConfig();
@@ -1763,30 +1898,53 @@
         gPgAnswerOffWarned = false;
         gPgAnswering = true;
         const epoch = gPgEpoch;
-        gPgQuestionUntil = Date.now() + 8000;     // 答题期间不再重复进入
-        let total = 0, answered = 0, pending = 0;
+        gPgQuestionUntil = Date.now() + 10000;    // 答题期间不再重复进入
+        let total = 0, answered = 0, pending = 0, waiting = 0;
+        const pendingIds = [];
         try {
-            const nodes = Array.from(document.querySelectorAll('.question-element-node'));
             if (cfg.collectBank) pgCollectBank();
+            const nodes = pgQuestionNodes();
             for (const node of nodes) {
-                if (epoch !== gPgEpoch) return;                        // 页面已切换：丢弃本页剩余计划
-                const w = node.querySelector('.question-wrapper');
-                if (!w || w.classList.contains('finished')) continue;
+                const w = node.querySelector('.question-wrapper') || node;
+                if (!w) continue;
+                if (w.classList.contains('finished') || node.classList.contains('finished')) continue;
+                const qid = pgQuestionId(node);
                 const lastSubmit = Number((w.dataset && w.dataset.dgutSubmittedAt) || 0);
-                if (lastSubmit && Date.now() - lastSubmit < 20000) continue;   // 已提交过：避免重复计划提交
+                const retried = !!(w.dataset && w.dataset.dgutRetried === '1');
+                if (lastSubmit && !retried && (Date.now() - lastSubmit < 20000)) {
+                    /* 已提交、等站点标记完成：不重复提交，也不阻塞翻页（否则站点不标记时会永远卡住） */
+                    waiting++;
+                    continue;
+                }
+                if (lastSubmit && !retried) {
+                    try { w.dataset.dgutRetried = '1'; } catch (e) {}
+                    chLog('第 ' + (qid || '?') + ' 题提交后仍未标记完成，重试提交一次。', 'warn');
+                }
+                if (epoch !== gPgEpoch) return;                    // 页面真的换了才中断本轮
                 total++;
-                const tag = pgReText((w.querySelector('.question-type-tag') || {}).textContent || '');
                 let answers = pgVmAnswer(node) || pgBankAnswer(node);
-                if (!answers) answers = await pgRemoteAnswer(node);     // 真异步等待，不再"同步取异步"
+                if (!answers) answers = await pgRemoteAnswer(node);   // 真异步等待，不再"同步取异步"
                 if (epoch !== gPgEpoch) return;
-                if (!answers || !answers.length) { pending++; continue; }   // 取不到答案：绝不提交
+                if (!answers || !answers.length) {
+                    pending++; if (qid) pendingIds.push(qid);
+                    pgLog('Answer', '未取到答案，跳过提交：' + (qid || '(无ID)'));
+                    continue;
+                }
+                const tag = pgReText((w.querySelector('.question-type-tag') || {}).textContent || '');
                 const type = pgResolveType(w, tag, answers.length);
-                if (!pgApplyAnswer(w, type, answers)) { pending++; continue; }
+                const norm = pgNormalizeAnswers(type, answers);
+                if (!norm.length) { pending++; if (qid) pendingIds.push(qid); continue; }
+                const filled = pgTryFill(node, type, norm);
+                if (!filled) {                                      // 有答案但没能写进作答区
+                    pending++; if (qid) pendingIds.push(qid);
+                    chLog('第 ' + (qid || '?') + ' 题有答案但未能填入（题型：' + type + '，答案：' + norm.join(',') + '）', 'warn');
+                    continue;
+                }
                 await pgSleep(180);
                 if (epoch !== gPgEpoch) return;
-                pgSubmitQuestion(node);                                 // 只有确认已填答案才提交
+                pgSubmitQuestion(node);                             // 只有确认已填答案才提交
                 try { w.dataset.dgutSubmittedAt = String(Date.now()); } catch (e) {}
-                if (cfg.collectBank) pgRememberAnswer(node, answers);
+                if (cfg.collectBank) pgRememberAnswer(node, norm);
                 answered++;
                 await pgSleep(120);
             }
@@ -1796,24 +1954,29 @@
                 if (gb && pgReText(gb.textContent) !== '重做') { pgTriggerMouseSequence(gb); await pgSleep(300); }
             }
             if (pending > 0) {
-                const key = pgPageId();
+                const key = pgPageId() || 'page';
+                if (!gPgRetrySince.has(key)) gPgRetrySince.set(key, Date.now());
+                const waited = Date.now() - gPgRetrySince.get(key);
                 const rounds = (gPgNoAnswerRounds.get(key) || 0) + 1;
                 gPgNoAnswerRounds.set(key, rounds);
-                chLog(`有 ${pending}/${total} 题未取到答案，已跳过提交（第 ${rounds}/${PG_MAX_NO_ANSWER_ROUNDS} 轮重试）。`, 'warn');
-                if (rounds >= PG_MAX_NO_ANSWER_ROUNDS) {
+                chLog(`本轮 ${pending} 题未完成（未取到答案/未能填入/等待确认），已跳过提交；已重试 ${rounds} 轮 / ${Math.round(waited / 1000)}s，最多重试 ${Math.round(PG_NO_ANSWER_BUDGET_MS / 1000)}s。`, 'warn');
+                if (waited >= PG_NO_ANSWER_BUDGET_MS || rounds >= PG_MAX_NO_ANSWER_ROUNDS) {
                     gPgSkippedPages.set(key, Date.now());
-                    chLog('本轮仍未取到答案：为不空交，本页不提交；已记录该页并继续后续页面。', 'warn');
+                    chLog('重试已达上限，为不空交本页不提交已失败题目，记录后继续后续页面。未完成题目：' + (pendingIds.join('、') || '(未知)'), 'warn');
                     gPgNoAnswerRounds.set(key, 0);
+                    gPgRetrySince.delete(key);
                     gPgQuestionUntil = Date.now() + 2500;
                     await pgSleep(500);
                     if (epoch !== gPgEpoch) return;
                     pgClickNext('跳过无法作答的页面');
                     return;
                 }
-                gPgQuestionUntil = Date.now() + 2600;
-                return;                                                // 未取到答案：不翻页，稍后重试
+                gPgQuestionUntil = Date.now() + 3000;
+                return;                                                // 未取到答案：不翻页，继续重试
             }
             gPgNoAnswerRounds.delete(pgPageId());
+            gPgRetrySince.delete(pgPageId());
+            if (waiting > 0) pgLog('Answer', waiting + ' 题已提交，等待站点标记完成');
             gPgQuestionUntil = Date.now() + 1500;
             await pgSleep(600);
             if (epoch !== gPgEpoch) return;
@@ -1825,11 +1988,14 @@
         if (!gCourseHelper || !gCourseHelper.running) return;
         if (pgDismissModal()) return;
         pgTouchPageDwell();
-        if (document.querySelector('.question-setting-panel')) {
+        if (document.querySelector('.question-setting-panel') || document.querySelector('.question-element-node')) {
             if (Date.now() < gPgQuestionUntil) { chUpdateStatus(); return; }
             if (!getCourseHelperConfig().autoAnswer) {
                 /* 自动答题关闭：仅在题目都已作答完成（或本页无题）时翻页，不干扰手动作答 */
-                const left = document.querySelectorAll('.question-wrapper:not(.finished)').length;
+                const left = pgQuestionNodes().filter(n => {
+                    const w = n.querySelector('.question-wrapper') || n;
+                    return !w.classList.contains('finished') && !n.classList.contains('finished');
+                }).length;
                 if (left === 0) pgClickNext('题目已全部完成（自动答题关闭）');
                 else { gPgQuestionUntil = Date.now() + 3000; chUpdateStatus(); }
                 return;
@@ -1897,6 +2063,7 @@
         gPgEpoch++;
         gPgSkippedPages.clear();
         gPgNoAnswerRounds.clear();
+        gPgRetrySince.clear();
         gPgLastPageId = '';
         gPgAdvancePageId = '';
         gPgLastAdvanceAt = 0;
@@ -1950,6 +2117,7 @@
                     <button id="dgut-ch-stop" class="dgut-btn">停止</button>
                     <button id="dgut-ch-export" class="dgut-btn">${icons.export} 导出题库</button>
                     <button id="dgut-ch-clear" class="dgut-btn">清空题库</button>
+                    <button id="dgut-ch-logclear" class="dgut-btn">清空日志</button>
                 </div>
             </div>
             <div class="dgut-card dgut-card--tight">
@@ -1967,6 +2135,7 @@
         ac.querySelector('#dgut-ch-stop').onclick = stopCourseHelper;
         ac.querySelector('#dgut-ch-export').onclick = () => { if (getCourseHelperConfig().collectBank) pgCollectBank(); pgExportBank(); };
         ac.querySelector('#dgut-ch-clear').onclick = pgClearBank;
+        ac.querySelector('#dgut-ch-logclear').onclick = () => { chLogClear(); chLog('运行日志已清空。', 'muted'); };
         ac.querySelectorAll('#dgut-ch-answer, #dgut-ch-next, #dgut-ch-bank').forEach(cb => {
             cb.addEventListener('change', () => {
                 saveCourseHelperConfig(readCfg());
@@ -1991,6 +2160,7 @@
             rateEl.addEventListener('input', () => { if (rateTimer) clearTimeout(rateTimer); rateTimer = setTimeout(commitRate, 400); });
             rateEl.addEventListener('change', commitRate);
         }
+        chLogRestore();          // 面板重开/视图重渲染后恢复历史日志
         chUpdateStatus();
     }
 
@@ -3977,7 +4147,7 @@ self.onmessage = function (e) {
     /* ============================================================
      * 详情页
      * ============================================================ */
-    const ABOUT_VERSION = 'v5.7.0';
+    const ABOUT_VERSION = 'v5.7.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     function renderDetailView(ac) {
