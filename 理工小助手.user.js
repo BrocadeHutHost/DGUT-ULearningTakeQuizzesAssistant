@@ -83,7 +83,7 @@
     /* 详细调试日志开关（默认关闭）。调试版 dist/理工小助手-调试版.js 会强制打开：
        打开后刷课决策链路里每一个分支、每一个 try/catch 都会进面板日志框，重点行标红。 */
     const DBG_KEY = 'dgut_debug_verbose';
-    const DEBUG = true;
+    const DEBUG = false;
 
     /* ============================================================
      * 错误码系统
@@ -2633,7 +2633,7 @@
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
-                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 🔍 详细调试日志</label>
+                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 详细调试日志</label>
                 </div>
                 <div class="dgut-hint" style="margin-bottom:10px;">遇到跳页时：打开上面的<b>详细调试日志</b> → 复现一次 → 点<b>复制日志</b>把内容发给开发者。日志里会写明每次翻页是<b>谁发起的、当时的站点标记是什么</b>。</div>
                 <div class="dgut-hint" style="margin-bottom:10px;">取不到答案时<b>不会提交</b>，会重试 <b>${PG_MAX_NO_ANSWER_ROUNDS}</b> 轮；视频停滞超过 <b>${Math.round(PG_STALL_MS / 1000)}s</b> 会自动尝试恢复。</div>
