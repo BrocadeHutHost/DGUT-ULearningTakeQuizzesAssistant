@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.7.1
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @version      5.7.2
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -783,13 +783,87 @@
         setTimeout(() => card.remove(), durationMs + 500);
     }
 
+    /* ============================================================
+     * 优学院接口响应归一化
+     *
+     * 该平台的接口有历史包袱，同一套 API 里成功标识并不统一：
+     *   · 老接口：{ code: 1, result: {...} }
+     *   · 新接口：{ code: 200, data: {...} } / { status: 200 }
+     *   · 少数只回 { success: true } 或直接回 result
+     *
+     * 旧实现只认 res.status === 200/201，于是当接口回 { code: 1 } 时，
+     * 签到其实成功了却被判成失败，并把整段 JSON 当成报错文案糊在日志里
+     * ——这就是用户看到的「签到响应失败」。
+     *
+     * 现在的原则：
+     *   1) 只要能识别出「成功」就算成功，别再把成功误判为失败；
+     *   2) 识别不出来时**既不报成功也不报失败**，而是把服务端原文打出来，
+     *      让人能直接看到服务器到底说了什么（不再猜）。
+     * ============================================================ */
+    const API_OK_CODES = new Set([1, 200, 201, '1', '200', '201', 'ok', 'OK', 'success', 'SUCCESS', 'true', 'True']);
+
+    /** 从响应里取「业务状态码」，兼容 code/status/statusCode/errCode/resultCode/state */
+    function apiCode(res) {
+        if (!res || typeof res !== 'object') return undefined;
+        for (const k of ['code', 'status', 'statusCode', 'errCode', 'resultCode', 'state']) {
+            const v = res[k];
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return undefined;
+    }
+    /** 取服务端自己的可读文案（优先 msg/message，其次 result 里的 msg/message） */
+    function apiMessage(res) {
+        if (!res || typeof res !== 'object') return '';
+        const deep = (res.result && typeof res.result === 'object') ? res.result : (res.data && typeof res.data === 'object' ? res.data : null);
+        const cands = [res.msg, res.message, res.errMsg, res.errorMsg, res.error, res.info,
+                       deep && deep.msg, deep && deep.message];
+        for (const c of cands) {
+            if (typeof c === 'string' && c.trim()) return c.trim();
+        }
+        return '';
+    }
+    /** 成功判定：显式布尔 → 显式状态码 → 「无状态码但带 result/data」的宽容兜底 */
+    function apiOk(res) {
+        if (!res || typeof res !== 'object') return false;
+        if (res.success === true || res.ok === true || res.error === false) return true;
+        const c = apiCode(res);
+        if (c !== undefined) return API_OK_CODES.has(typeof c === 'string' ? c.trim() : c);
+        return ('result' in res) || ('data' in res);
+    }
+    /** 把服务端原文压成一行，用于日志（识别不出结构时靠它定位问题） */
+    function apiRaw(res, max = 200) {
+        try { return JSON.stringify(res).slice(0, max); } catch (e) { return String(res).slice(0, max); }
+    }
+
+    /* ------------------------------------------------------------
+     * 关于认证（已用真实接口核实，2026-10）：
+     *   · 所有业务接口只认请求头 Authorization: <token>（原始值，**不加 Bearer**）
+     *   · application.dgut.edu.cn 的课堂/签到接口**不认 cookie**：
+     *     只带 cookie → HTTP 401 + { code:2001, message:"缺少访问token" }
+     *     Bearer 前缀  → HTTP 401 + { code:2101, message:"无效的token" }
+     *   · Origin/Referer 与 Host 不一致不会被拒（按目标域给只是更规范）
+     *   所以这里保持匿名请求（不带 cookie），认证只依赖 Authorization 头。
+     * ------------------------------------------------------------ */
+
     async function gmFetchEx(url, opts = {}) {
         const token = await getAuthToken();
         if (!token) throw new Error(errFull(ERR.SIGN_NO_TOKEN));
         const method = String(opts.method || 'GET').toUpperCase();
-        const headers = { 'Accept': 'application/json, text/plain, */*', 'Referer': API_HOST + '/', 'Origin': API_HOST };
+        const headers = { 'Accept': 'application/json, text/plain, */*' };
+
+        /* 修复：旧实现无条件把 Origin/Referer 写成 lms.dgut.edu.cn，
+           但签到接口在 application.dgut.edu.cn。跨站 POST 带着不匹配的
+           Origin/Referer 很容易被 WAF 拦掉，表现为「响应失败」。
+           现在按目标地址推导，且只写我们信任的域。 */
+        let target = null;
+        try { target = new URL(url, location.href); } catch (e) { target = null; }
+        if (target && /(^|\.)(dgut\.edu\.cn|ulearning\.cn)$/i.test(target.hostname)) {
+            headers['Referer'] = target.origin + '/';
+            headers['Origin'] = target.origin;
+        }
         if (opts.headers) Object.assign(headers, opts.headers);
         headers['Authorization'] = token;
+
         let data;
         if (opts.data !== undefined && opts.data !== null) {
             headers['Content-Type'] = 'application/json;charset=UTF-8';
@@ -799,10 +873,26 @@
             GM_xmlhttpRequest({
                 method, url, anonymous: true, headers, data, timeout: 15000,
                 onload: (res) => {
-                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
+                    const text = String(res.responseText == null ? '' : res.responseText).replace(/^\uFEFF/, '').trim();
+                    let parsed = null;
+                    if (text) {
+                        try { parsed = JSON.parse(text); }
+                        catch (e) {
+                            /* 兼容 JSONP 包装：callback({...}) */
+                            const m = /^[A-Za-z_$][\w$]*\s*\(([\s\S]*)\)\s*;?$/.exec(text);
+                            if (m) { try { parsed = JSON.parse(m[1]); } catch (e2) {} }
+                        }
+                    }
+                    /* 401/403：旧实现只报「认证失败 HTTP 401」，看不到服务端原因。
+                       现在把服务端自己的 message 带出来（如「缺少访问token」「无效的token」）。 */
+                    if (res.status === 401 || res.status === 403) {
+                        const why = parsed ? apiMessage(parsed) : text.slice(0, 60);
+                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
                     if (res.status >= 400) return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status)));
-                    try { resolve(JSON.parse(res.responseText)); }
-                    catch (e) { reject(new Error(errFull(ERR.SIGN_PARSE_FAIL, String(res.responseText).slice(0, 80)))); }
+                    if (!text) return resolve({});                 // 空响应体按空对象处理，不再当解析失败
+                    if (parsed === null) return reject(new Error(errFull(ERR.SIGN_PARSE_FAIL, text.slice(0, 80))));
+                    return resolve(parsed);
                 },
                 onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
                 ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
@@ -978,18 +1068,36 @@
     }
     async function signFetchClassrooms(courseId) {
         const res = await gmFetchEx(`${SIGN_LMS_BASE}/wisdomClassroom/student/getClassroomList?ocId=${courseId}&status=&pageNum=1&pageSize=10&order=0&lang=zh`);
-        const list = (res && res.code === 1 && res.result && res.result.list) || [];
+        /* 修复：旧实现只在 res.code === 1 时取值，其它情况静默返回空数组，
+           于是接口报错会被显示成「今天没有课堂」，用户完全看不到真实原因。 */
+        if (!apiOk(res)) throw new Error('课堂列表接口返回异常：' + (apiMessage(res) || apiRaw(res)));
+        const list = (res.result && res.result.list) || (res.data && res.data.list) || res.list || [];
         return list.map(c => ({ id: c.id, title: c.title || '' }));
     }
     async function signFetchActivities(classroomId) {
         const res = await gmFetchEx(`${SIGN_APP_BASE}/wisdomClassroom/student/classroomActivitys?classroomId=${classroomId}&pageNum=1&pageSize=999`);
-        return (res && res.code === 1 && res.result && res.result.list) || [];
+        if (!apiOk(res)) throw new Error('课堂活动接口返回异常：' + (apiMessage(res) || apiRaw(res)));
+        return (res.result && res.result.list) || (res.data && res.data.list) || res.list || [];
     }
     function signAttendanceCode(activity) {
         if (!activity) return '';
         for (const k of ['attendanceCode', 'code', 'codeStr', 'signCode', 'checkInCode']) { if (activity[k]) return String(activity[k]); }
         return '';
     }
+    /**
+     * 提交签到。
+     *
+     * ★ 修复「签到响应失败」（2026-10 用真实接口核实）：
+     *   优学院接口的成功结构是 `{ code: 1, message: "成功", result: {…} }`，
+     *   **根本没有 status 字段**。旧实现却判定 `res.status === 200 || res.status === 201`，
+     *   导致：
+     *     · 签到其实成功了 → 被判定为失败；
+     *     · 日志里把整段 JSON 当报错文案显示 → 用户看到的就是「响应失败」。
+     *   现在统一走 apiOk()/apiMessage()，并且：
+     *     1) 只在「确实没收到响应」（网络错误/超时）时重试一次，HTTP 已返回的绝不重试，
+     *        避免重复提交；
+     *     2) 判定不出结果时，把服务端原文原样带回日志，让人能看到服务器到底说了什么。
+     */
     async function signSubmit(course, classroomId, activity) {
         const scoreType = activity.scoreType;
         const kind = signKindText(scoreType);
@@ -1001,13 +1109,28 @@
         const uid = await signResolveUserId();
         if (!uid) return { ok: false, kind, message: errFull(ERR.SIGN_NO_USERID) };
         const payload = { attendanceID: attendanceId, classID: classroomId, userID: uid, location: `${cfg.lat},${cfg.lng}`, address: cfg.address, enterWay: 1, attendanceCode: code };
-        let status, message;
+        let res;
         try {
-            const res = await gmFetchEx(`${SIGN_APP_BASE}/newAttendance/signByStu`, { method: 'POST', data: payload });
-            status = res && res.status;
-            message = (res && (res.msg || res.message)) || (res ? JSON.stringify(res).slice(0, 120) : '');
-        } catch (e) { status = 'exception'; message = e.message; }
-        return { ok: status === 200 || status === 201, already: status === 201, status, message, kind };
+            res = await gmFetchEx(`${SIGN_APP_BASE}/newAttendance/signByStu`, { method: 'POST', data: payload });
+        } catch (e) {
+            const msg = String((e && e.message) || '');
+            if (!/网络请求失败|请求超时/.test(msg)) return { ok: false, kind, message: msg, raw: '' };
+            try {
+                res = await gmFetchEx(`${SIGN_APP_BASE}/newAttendance/signByStu`, { method: 'POST', data: payload });
+            } catch (e2) {
+                return { ok: false, kind, message: String((e2 && e2.message) || msg), raw: '' };
+            }
+        }
+        const codeVal = apiCode(res);
+        const serverMsg = apiMessage(res);
+        const ok = apiOk(res);
+        const already = codeVal === 201 || /已(经)?签|重复/.test(serverMsg);
+        return {
+            ok, already, kind,
+            status: codeVal,
+            message: serverMsg || (ok ? '签到成功' : '') || '接口返回无法识别',
+            raw: ok ? '' : apiRaw(res)
+        };
     }
     function signLog(text, level = 'info') {
         const line = { t: Date.now(), text: String(text), level };
@@ -1054,7 +1177,7 @@
                     catch (e) { result = { ok: false, kind: signKindText(activity.scoreType), message: e.message }; }
                     if (result.skip) { signLog(`[${course.name}] ${result.kind}：${result.message}`, 'warn'); gSignMonitor.checked.add(key); writeSignRecord(course.name, result.kind, activity, { status: 'skipped', message: result.message }); continue; }
                     if (result.ok) { gSignMonitor.checked.add(key); signLog(`? [${course.name}] ${result.kind}：${result.already ? '已签到过' : '签到成功'}`, 'success'); }
-                    else signLog(`× [${course.name}] ${result.kind}：${result.message}`, 'warn');
+                    else signLog(`× [${course.name}] ${result.kind}：${result.message}${result.raw ? '（服务端原文：' + result.raw + '）' : ''}`, 'warn');
                     writeSignRecord(course.name, result.kind, activity, result);
                 }
             }
@@ -1277,6 +1400,13 @@
     const PG_NO_ANSWER_BUDGET_MS = 90000;    // 同一页最多重试时长（给慢接口/慢渲染留足时间）
     const PG_SKIP_TTL_MS = 30 * 60 * 1000;   // 跳过页面的记忆时长
     const PG_ANSWER_TTL_MS = 5 * 60 * 1000;  // 答案缓存时长
+    /* ---- 「跳过中间视频」修复相关（2026-10）----
+     * 课件换页后，新页的 <video> 是异步渲染出来的；在这之前 DOM 里可能还留着
+     * 上一页已经播完的 <video>。旧逻辑只看「当前 DOM 的 video 是不是都播完了」，
+     * 于是换页 2~3 秒后就误判「本页已完成」再点一次下一页 —— 中间的视频整段被跳过。
+     * 现在：只把「属于当前页」的 video 当成本页内容，并给媒体出现留足等待时间。 */
+    const PG_MEDIA_APPEAR_MS = 20000;        // 换页后等待「本页自己的视频」出现的最长时间
+    const PG_MEDIA_GRACE_MS = 8000;          // 换页后至少多久内不判定「本页无视频」
 
     function isCoursePage() { return /learnCourse/i.test(location.pathname) || /learnCourse/i.test(location.href); }
     function getCourseHelperConfig() { return Object.assign({}, DEFAULT_COURSE_HELPER, GM_getValue(COURSE_HELPER_KEY, {}) || {}); }
@@ -1345,9 +1475,20 @@
             GM_xmlhttpRequest({
                 method: 'GET', url, timeout: 15000,
                 onload: (res) => {
-                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
-                    try { resolve(JSON.parse(res.responseText)); }
-                    catch (e) { reject(new Error(errFull(ERR.SIGN_PARSE_FAIL))); }
+                    /* 修复：旧实现只拦 401/403，其它 4xx/5xx 只要响应体是 JSON 就会被当成
+                       答案返回，错误信息会被当成「答案列表」参与后续解析。现在统一拦下。 */
+                    let parsed = null;
+                    try { parsed = JSON.parse(res.responseText); } catch (e) {}
+                    if (res.status === 401 || res.status === 403) {
+                        const why = parsed ? apiMessage(parsed) : '';
+                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
+                    if (res.status >= 400) {
+                        const why = parsed ? apiMessage(parsed) : '';
+                        return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
+                    if (parsed === null) return reject(new Error(errFull(ERR.SIGN_PARSE_FAIL)));
+                    return resolve(parsed);
                 },
                 onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
                 ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
@@ -1686,6 +1827,7 @@
     let gPgLastAdvanceAt = 0;
     let gPgAdvancePageId = '';
     let gPgMediaWaitSince = 0;
+    let gPgMediaWaitWarned = false;      // 本页是否已提示过「等本页视频出现」
     let gPgPageChangeAt = Date.now();
     let gPgLastPageId = '';
     let gPgEpoch = 0;
@@ -1695,6 +1837,34 @@
     const gPgSkippedPages = new Map();     // 页面 key -> 跳过时间
     const gPgNoAnswerRounds = new Map();   // 页面 key -> 连续取不到答案的轮次
     const gPgRetrySince = new Map();       // 页面 key -> 本轮重试开始时间
+
+    /* ------------------------------------------------------------------
+     * 视频归属标记（修复「跳过中间视频」的核心）
+     *
+     * 课件正文区是**同一个** .page-element 容器（实测：整页只有 1 个），
+     * Knockout 换页时只是重新求值绑定；而 <video> 是由
+     *   <div class="video-media-element" data-bind="html: pageElement.content()">
+     * 这段绑定注入的。换页瞬间，新页内容还没就绪，DOM 里躺着的是
+     * **上一页已经播完的 <video>**（脚本还额外 patch 了 Element.prototype.remove
+     * 来阻止站点删掉 video，于是它更不容易消失）。
+     *
+     * 旧逻辑：`videos = 当前 DOM 里所有 video`，只要它们都 "已播完" 就翻页。
+     * 于是换页后 2~3 秒（PG_PAGE_DWELL_MS + PG_ADVANCE_COOLDOWN_MS）就会
+     * 因为「上一页那个播完的 video」再点一次下一页，
+     * 把新页还没渲染出来的视频整段跳过去 —— 连着跳好几个。
+     *
+     * 解决办法：记住每个 video 元素属于哪一页，只把属于当前页的当成本页内容。
+     * 播放器被复用换源（currentSrc 变了）时重新归属到当前页。
+     * ------------------------------------------------------------------ */
+    const gPgVideoMark = new WeakMap();     // video -> { page, src }
+    function pgVideoOwner(v, pid) {
+        if (!v || !pid) return '';
+        const src = String(v.currentSrc || v.src || '');
+        const rec = gPgVideoMark.get(v);
+        if (!rec) { gPgVideoMark.set(v, { page: pid, src }); return pid; }
+        if (rec.page !== pid && rec.src !== src) { rec.page = pid; rec.src = src; return pid; }
+        return rec.page;
+    }
 
     function pgPageId() {
         const a = document.querySelector('.page-name.active');
@@ -1714,6 +1884,9 @@
         try {
             let node = v.parentElement, depth = 0;
             while (node && depth < 8) {
+                /* 一旦祖先容器里出现目录项（.page-name），说明已经走出播放器范围了；
+                   目录项上的完成标记属于「页面」，不能拿来判断「这个视频播完了」。 */
+                if (node.querySelectorAll('.page-name').length) break;
                 if (node.querySelectorAll('video').length <= 1) {
                     const spans = node.querySelectorAll("span[data-bind*='i18nMessageText']");
                     for (let k = 0; k < spans.length; k++) {
@@ -1739,6 +1912,9 @@
             gPgQuestionUntil = 0;
             gPgEndWarned = false;
             gPgNextWarned = false;
+            /* 换页后必须重新等待本页媒体：不清空这两个会沿用上一页的等待状态 */
+            gPgMediaWaitSince = 0;
+            gPgMediaWaitWarned = false;
             gPgNoAnswerRounds.delete(pid);
             gPgRetrySince.delete(pid);
         }
@@ -2005,36 +2181,75 @@
         }
         const videos = Array.from(document.querySelectorAll('video'));
         if (videos.length) {
-            gPgMediaWaitSince = 0;
+            const pid = pgPageId();
+            if (!pid) {
+                /* 页名读不到（切页瞬间的 DOM 抖动）：本轮不下任何结论，尤其不翻页 */
+                chUpdateStatus();
+                return;
+            }
+            /* 只把「属于本页」的 video 当成本页内容。上一页遗留的播放器一律忽略，
+               否则会拿上一页那个「已播完」的 video 去证明本页也播完了。 */
+            const mine = [];
+            videos.forEach((v, idx) => { if (pgVideoOwner(v, pid) === pid) mine.push({ v, idx }); });
+            if (mine.length) gPgMediaWaitSince = 0;      // 本页媒体已就位，清掉等待计时
+
+            if (!mine.length) {
+                /* DOM 里的 video 全是上一页遗留的 → 本页播放器还没渲染出来。
+                   这是「跳过中间视频」的根源，绝不能在这里翻页。
+                   注意：这里刻意**不**用站点的 .complete 标记走捷径 ——
+                   宁可多等一会儿，也不能冒任何「跳过本页」的风险。 */
+                if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
+                const waited = Date.now() - gPgMediaWaitSince;
+                if (waited < PG_MEDIA_APPEAR_MS) {
+                    if (!gPgMediaWaitWarned) {
+                        gPgMediaWaitWarned = true;
+                        chLog(`已切到新页，但本页播放器还没出现（DOM 里只剩上一页的 <video>）。最多等 ${Math.round(PG_MEDIA_APPEAR_MS / 1000)}s，期间不翻页。`, 'muted');
+                    }
+                    chUpdateStatus();
+                    return;
+                }
+                chLog(`等待 ${Math.round(waited / 1000)}s 仍未出现本页视频，按「本页无视频」处理。`, 'warn');
+                gPgMediaWaitSince = 0;
+                pgClickNext('本页未出现视频');
+                return;
+            }
+
             let i = 0;
-            for (; i < videos.length; i++) {
-                const v = videos[i];
+            for (; i < mine.length; i++) {
+                const v = mine[i].v;
                 if (pgVideoFinished(v)) continue;
                 pgRateGuard.hook(v);
                 pgRateGuard.refresh();
                 const rate = pgRateGuard.target;
                 if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate);
-                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[i];
+                /* 倍速/播放按钮按「该 video 在全文档中的序号」取，不能用本页子集的下标，
+                   否则页面里残留旧播放器时按钮会错位。 */
+                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[mine[i].idx];
                 if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
                 pgVideoWatchdog(v);                       // 卡死检测
                 if (v.paused) {
                     v.muted = true;
                     v.play().catch(() => {
-                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[i];
+                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[mine[i].idx];
                         if (playBtn) playBtn.click();
                     });
                 }
                 break;
             }
-            if (i === videos.length) pgClickNext('视频已全部完成');
+            if (i === mine.length) pgClickNext('本页视频已全部完成');
             else chUpdateStatus();
             return;
         }
         if (pgHasMediaContainer()) {
+            /* 播放器容器在、但还没有 video：同样要等本页视频渲染出来，不能急着翻页 */
             if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
             chUpdateStatus();
-            if (Date.now() - gPgMediaWaitSince < 10000) return;
+            if (Date.now() - gPgMediaWaitSince < PG_MEDIA_APPEAR_MS) return;
         }
+        /* 换页后的保护期：video 和播放器容器可能整体都还没渲染出来。
+           旧实现只等 PG_PAGE_DWELL_MS(2s) 就判定「本页无视频」并翻页，
+           这正是跳过中间视频的第二条路径。 */
+        if (Date.now() - gPgPageChangeAt < PG_MEDIA_GRACE_MS) { chUpdateStatus(); return; }
         gPgMediaWaitSince = 0;
         pgClickNext('当前页无视频');
     }
@@ -2223,8 +2438,21 @@
             GM_xmlhttpRequest({
                 method: 'GET', url, headers: token ? { AUTHORIZATION: token } : {}, timeout: 15000,
                 onload: (res) => {
-                    if (res.status === 401 || res.status === 403) return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status)));
-                    try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(new Error(errFull(ERR.PEER_PARSE_FAIL))); }
+                    /* 修复：旧实现只拦 401/403，其它 4xx/5xx 只要响应体是 JSON 就被当成
+                       成功返回，接口报错会被静默显示成「0 条记录」。现在显式拦下所有
+                       HTTP 错误，并带出服务端文案。 */
+                    let parsed = null;
+                    try { parsed = JSON.parse(res.responseText); } catch (e) {}
+                    if (res.status === 401 || res.status === 403) {
+                        const why = parsed ? apiMessage(parsed) : '';
+                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
+                    if (res.status >= 400) {
+                        const why = parsed ? apiMessage(parsed) : String(res.responseText || '').slice(0, 60);
+                        return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
+                    if (parsed === null) return reject(new Error(errFull(ERR.PEER_PARSE_FAIL)));
+                    return resolve(parsed);
                 },
                 onerror: () => reject(new Error(errFull(ERR.PEER_NET_FAIL))),
                 ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
@@ -2454,17 +2682,36 @@
         if (modal && pgVisible(modal)) { const b = modal.querySelector('.btn-submit'); if (b && pgVisible(b)) b.click(); return; }
         if (rdSolveChapterModal()) return;
         const key = rdBookKey();
-        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; }
+        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; }
         if (vm && vm.currentPage) {
             const list = rdFlatList(vm);
             const pid = rdPageId(vm.currentPage());
             if (pid && pid !== gRead.curPageId) { gRead.curPageId = pid; gRead.pageStart = Date.now(); }
             if (gRead.total >= READ_MIN_SEC) {
-                if (gRead.curPageId && Date.now() - gRead.pageStart >= READ_NAV_SEC * 1000) {
+                const dwellOk = gRead.curPageId && Date.now() - gRead.pageStart >= READ_NAV_SEC * 1000;
+                /* ★ 修复「连着翻页、跳过中间内容」（与刷课跳过中间视频同一类 bug）：
+                   goNextPage() 之后 currentPage 可能要过一会儿才更新，而旧实现每
+                   READ_NAV_SEC(3s) 就无条件再点一次 —— 页面还没切走就被连点跳过。
+                   现在：同一页只点一次；点过之后必须等 currentPage 真正切走才允许再点。
+                   若长时间没切走，只按 15 秒一次做低频重试，并先给出提示。 */
+                if (dwellOk && gRead.lastAdvancePageId !== gRead.curPageId) {
+                    gRead.lastAdvancePageId = gRead.curPageId;
+                    gRead.lastAdvanceAt = Date.now();
+                    gRead.stuckWarned = false;
                     try { if (typeof vm.goNextPage === 'function') vm.goNextPage(); } catch (e) {}
                     gRead.pageStart = Date.now();
                     const idx = rdFindIndex(list, gRead.curPageId);
                     if (idx >= list.length - 1) { const res = rdAdvanceSection(vm, gRead.curPageId); if (!res.ok && res.atEnd) { rdStop(); showToastCard(`${KAO.ok} 求是读书`, '全部书目已读完', '', 8000); } }
+                } else if (dwellOk) {
+                    const stuckMs = Date.now() - (gRead.lastAdvanceAt || gRead.pageStart);
+                    if (stuckMs > 15000) {
+                        gRead.lastAdvanceAt = Date.now();
+                        gRead.stuckWarned = false;
+                        try { if (typeof vm.goNextPage === 'function') vm.goNextPage(); } catch (e) {}
+                    } else if (!gRead.stuckWarned && stuckMs > 8000) {
+                        gRead.stuckWarned = true;
+                        showStatus('求是读书：已点翻页但页面未切换，等待中…');
+                    }
                 }
             }
         }
@@ -2485,7 +2732,7 @@
             return;
         }
         const key = rdBookKey();
-        gRead = { running: true, timer: null, bookKey: key, accumulated: rdBookTime(key), sessionStart: Date.now(), lastSave: rdBookTime(key), total: rdBookTime(key), curPageId: null, pageStart: Date.now() };
+        gRead = { running: true, timer: null, bookKey: key, accumulated: rdBookTime(key), sessionStart: Date.now(), lastSave: rdBookTime(key), total: rdBookTime(key), curPageId: null, pageStart: Date.now(), lastAdvancePageId: null, lastAdvanceAt: 0, stuckWarned: false };
         if (vm.currentPage) gRead.curPageId = rdPageId(vm.currentPage());
         gRead.timer = setInterval(rdTick, 1000);
         rdSaveCfg({ readerAutoStart: true });
