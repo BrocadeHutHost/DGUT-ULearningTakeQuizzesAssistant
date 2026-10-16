@@ -30,8 +30,20 @@
 // @connect      api.github.com
 // @connect      github.com
 // @homepageURL  https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant
+// @connect      raw.githubusercontent.com
 // @license      AGPL-3.0-only
 // ==/UserScript==
+
+/*
+ * 更新策略：**默认不自动更新**
+ *
+ * 这里刻意不写 @updateURL / @downloadURL —— 那会让油猴在后台强制自动更新，
+ * 用户没有选择权。改为在「详情页 → 作者与许可」提供一个「自动检查更新」开关：
+ *   · 默认关闭；开启后打开该页才会去 GitHub 读取最新 @version 并提示；
+ *   · 只做「检查 + 提示」，绝不自动替换脚本，更新动作始终由用户决定。
+ *
+ * 代价：修复不会自动送到老用户手里 —— 用户需要自行重装一次、或主动打开该开关。
+ */
 
 (function () {
     'use strict';
@@ -59,6 +71,8 @@
     const DOC_SIGN_KEY  = 'dgut_doc_signatures';
     const IMG_CFG_KEY   = 'dgut_image_tool_config';
     const DETAIL_TAB_KEY = 'dgut_detail_tab';
+    /* 自动检查更新：默认关闭（true 才会去 GitHub 比对版本号，只提示不自动替换） */
+    const AUTO_UPDATE_KEY = 'dgut_auto_update_check';
     const DEBUG = true;
 
     /* ============================================================
@@ -4495,8 +4509,45 @@ self.onmessage = function (e) {
     /* ============================================================
      * 详情页
      * ============================================================ */
-    const ABOUT_VERSION = 'v5.7.1';
+    /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
+       之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
+       排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
+    const ABOUT_VERSION = 'v5.7.4';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
+
+    /* ------------------------------------------------------------------
+     * 更新检查（**可选、默认关闭**）
+     *
+     * 不使用油猴的 @updateURL/@downloadURL（那会强制后台自动更新，用户无法选择）；
+     * 改为这里提供一个开关，默认关闭。开启后只「拉取远端 @version 做比较并提示」，
+     * 绝不自动替换脚本 —— 更新动作始终由用户决定。
+     * ------------------------------------------------------------------ */
+    const UPDATE_RAW_URL = 'https://raw.githubusercontent.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js';
+
+    function updateCheckOn() { return GM_getValue(AUTO_UPDATE_KEY, false) === true; }
+    function cmpVer(a, b) {
+        const pa = String(a).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+        const pb = String(b).replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            const d = (pa[i] || 0) - (pb[i] || 0);
+            if (d) return d > 0 ? 1 : -1;
+        }
+        return 0;
+    }
+    async function fetchRemoteVersion() {
+        if (typeof GM_xmlhttpRequest !== 'function') throw new Error('GM_xmlhttpRequest 不可用');
+        const text = await new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET', url: UPDATE_RAW_URL, timeout: 15000,
+                onload: (r) => (r.status === 200 ? resolve(r.responseText) : reject(new Error('HTTP ' + r.status))),
+                onerror: () => reject(new Error('网络错误')),
+                ontimeout: () => reject(new Error('请求超时')),
+            });
+        });
+        const m = /^\/\/\s*@version\s+(\S+)\s*$/m.exec(text);
+        if (!m) throw new Error('远端脚本里没找到 @version');
+        return m[1];
+    }
 
     function renderDetailView(ac) {
         let activeTab = GM_getValue(DETAIL_TAB_KEY, 'about');
@@ -4537,6 +4588,11 @@ self.onmessage = function (e) {
                         <div><b>许可证：</b>AGPL-3.0-only · <a class="dgut-link" href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener noreferrer">许可全文</a></div>
                         <div><b>版本：</b>${ABOUT_VERSION}</div>
                     </div>
+                    <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);">
+                        <label class="dgut-label"><input type="checkbox" id="dgut-auto-update" ${updateCheckOn() ? 'checked' : ''}> 自动检查更新（默认关闭）</label>
+                        <button id="dgut-check-update" class="dgut-btn" style="margin-left:8px;">立即检查</button>
+                        <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。本脚本不会后台自动更新，需要更新时请手动重装。</div>
+                    </div>
                 </div>
                 <div class="dgut-card">
                     <div class="dgut-section-title">功能一览</div>
@@ -4552,6 +4608,37 @@ self.onmessage = function (e) {
                     </div>
                 </div>`;
             renderGitHubInfo(contentEl.querySelector('#dgut-gh-info'));
+
+            /* 更新检查：**默认关闭**；只有开关打开时，打开本页才会自动检查一次。
+               只做「提示」，绝不自动替换脚本。 */
+            const upCb = contentEl.querySelector('#dgut-auto-update');
+            const upBtn = contentEl.querySelector('#dgut-check-update');
+            const upRes = () => contentEl.querySelector('#dgut-update-result');
+            const runCheck = async (manual) => {
+                if (!manual && !updateCheckOn()) return;
+                const el = upRes();
+                if (el) el.textContent = '正在检查…';
+                try {
+                    const remote = await fetchRemoteVersion();
+                    const local = ABOUT_VERSION.replace(/^v/i, '');
+                    if (cmpVer(remote, local) > 0) {
+                        if (el) el.innerHTML = `发现新版本 <b>v${escapeHtml(remote)}</b>（当前 v${escapeHtml(local)}）· <a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">前往 GitHub 更新</a>`;
+                        showToastCard(`发现新版本 v${remote}`, `当前 v${local}，请到 GitHub 更新`, '本脚本不会自动替换，需要你手动重装一次', 12000);
+                    } else {
+                        if (el) el.textContent = `已是最新版本 v${local}`;
+                    }
+                } catch (e) {
+                    if (el) el.textContent = '检查失败：' + ((e && e.message) || e);
+                }
+            };
+            if (upCb) upCb.onchange = () => {
+                GM_setValue(AUTO_UPDATE_KEY, upCb.checked === true);
+                showStatus(upCb.checked ? '已开启自动检查更新' : '已关闭自动检查更新');
+                if (upCb.checked) runCheck(true);
+                else { const el = upRes(); if (el) el.textContent = '未开启自动检查。本脚本不会后台自动更新，需要更新时请手动重装。'; }
+            };
+            if (upBtn) upBtn.onclick = () => runCheck(true);
+            runCheck(false);
         };
 
         const renderErrors = () => {
