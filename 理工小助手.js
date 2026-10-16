@@ -2,7 +2,7 @@
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
 // @version      5.7.5
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.5：更新检查更可靠、更好懂——结果里同时显示远端与本地版本号（以前只显示本地，看到「已是最新」分不清是真版本相同还是压根没取到远端），并新增 jsDelivr 镜像源作为 raw.githubusercontent.com 的备用（该域名在国内常被 DNS 污染）。v5.7.4：彻底修复「刷课跳过中间视频」的真正根因——点击模拟函数同时执行了 dispatchEvent('click') 与 el.click()，同一个 click 处理函数被调用两次，「下一页」按钮的 goNextPage 于是连翻两页、中间那页视频整段被跳过；现在 mousedown/mouseup 照发而 click 只触发一次（该函数是全局公共的，播放/暂停、倍速按钮、提交答题、弹窗按钮一并修好）。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -4522,7 +4522,12 @@ self.onmessage = function (e) {
      * 改为这里提供一个开关，默认关闭。开启后只「拉取远端 @version 做比较并提示」，
      * 绝不自动替换脚本 —— 更新动作始终由用户决定。
      * ------------------------------------------------------------------ */
-    const UPDATE_RAW_URL = 'https://raw.githubusercontent.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js';
+    /* 多源：raw.githubusercontent.com 在国内常被 DNS 污染/拦截（实测解析到非公网 IP），
+       所以再挂一个 jsDelivr 镜像源；两个都失败才算检查失败。 */
+    const UPDATE_SOURCES = [
+        'https://raw.githubusercontent.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js',
+        'https://cdn.jsdelivr.net/gh/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant@main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js',
+    ];
 
     function updateCheckOn() { return GM_getValue(AUTO_UPDATE_KEY, false) === true; }
     function cmpVer(a, b) {
@@ -4534,19 +4539,31 @@ self.onmessage = function (e) {
         }
         return 0;
     }
-    async function fetchRemoteVersion() {
-        if (typeof GM_xmlhttpRequest !== 'function') throw new Error('GM_xmlhttpRequest 不可用');
-        const text = await new Promise((resolve, reject) => {
+    function fetchText(url) {
+        return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
-                method: 'GET', url: UPDATE_RAW_URL, timeout: 15000,
+                method: 'GET', url, timeout: 15000,
                 onload: (r) => (r.status === 200 ? resolve(r.responseText) : reject(new Error('HTTP ' + r.status))),
                 onerror: () => reject(new Error('网络错误')),
                 ontimeout: () => reject(new Error('请求超时')),
             });
         });
-        const m = /^\/\/\s*@version\s+(\S+)\s*$/m.exec(text);
-        if (!m) throw new Error('远端脚本里没找到 @version');
-        return m[1];
+    }
+    /** 依次尝试各镜像源，返回 { version, from }；全部失败才抛错 */
+    async function fetchRemoteVersion() {
+        if (typeof GM_xmlhttpRequest !== 'function') throw new Error('GM_xmlhttpRequest 不可用');
+        const errs = [];
+        for (const url of UPDATE_SOURCES) {
+            try {
+                const text = await fetchText(url);
+                const m = /^\/\/\s*@version\s+(\S+)\s*$/m.exec(text);
+                if (!m) { errs.push(new URL(url).hostname + ': 响应里没有 @version'); continue; }
+                return { version: m[1], from: new URL(url).hostname };
+            } catch (e) {
+                errs.push(new URL(url).hostname + ': ' + ((e && e.message) || e));
+            }
+        }
+        throw new Error(errs.join('；'));
     }
 
     function renderDetailView(ac) {
@@ -4619,13 +4636,17 @@ self.onmessage = function (e) {
                 const el = upRes();
                 if (el) el.textContent = '正在检查…';
                 try {
-                    const remote = await fetchRemoteVersion();
+                    const r = await fetchRemoteVersion();
+                    const remote = r.version;
                     const local = ABOUT_VERSION.replace(/^v/i, '');
+                    /* ★ 无论有没有更新，都把「远端 / 本地」两个版本号一起显示。
+                       否则用户看到「已是最新」时无法判断：是真的一样，
+                       还是远端压根没取到、逻辑走偏了。 */
                     if (cmpVer(remote, local) > 0) {
-                        if (el) el.innerHTML = `发现新版本 <b>v${escapeHtml(remote)}</b>（当前 v${escapeHtml(local)}）· <a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">前往 GitHub 更新</a>`;
-                        showToastCard(`发现新版本 v${remote}`, `当前 v${local}，请到 GitHub 更新`, '本脚本不会自动替换，需要你手动重装一次', 12000);
+                        if (el) el.innerHTML = `发现新版本 <b>v${escapeHtml(remote)}</b>（本地 v${escapeHtml(local)}）· <a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">前往 GitHub 更新</a><br><span style="opacity:.7">来源：${escapeHtml(r.from)}</span>`;
+                        showToastCard(`发现新版本 v${remote}`, `本地 v${local}，请到 GitHub 更新`, '本脚本不会自动替换，需要你手动重装一次', 12000);
                     } else {
-                        if (el) el.textContent = `已是最新版本 v${local}`;
+                        if (el) el.textContent = `已是最新（远端 v${remote} · 本地 v${local}）· 来源：${r.from}`;
                     }
                 } catch (e) {
                     if (el) el.textContent = '检查失败：' + ((e && e.message) || e);
