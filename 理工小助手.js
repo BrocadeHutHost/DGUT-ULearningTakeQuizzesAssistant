@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.7.6
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.5：更新检查更可靠、更好懂——结果里同时显示远端与本地版本号（以前只显示本地，看到「已是最新」分不清是真版本相同还是压根没取到远端），并新增 jsDelivr 镜像源作为 raw.githubusercontent.com 的备用（该域名在国内常被 DNS 污染）。v5.7.4：彻底修复「刷课跳过中间视频」的真正根因——点击模拟函数同时执行了 dispatchEvent('click') 与 el.click()，同一个 click 处理函数被调用两次，「下一页」按钮的 goNextPage 于是连翻两页、中间那页视频整段被跳过；现在 mousedown/mouseup 照发而 click 只触发一次（该函数是全局公共的，播放/暂停、倍速按钮、提交答题、弹窗按钮一并修好）。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @version      5.8.0
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.8.0：修复「签到监测开始前就已签到的活动检测不到」——旧的循环过滤把「进行中且已签到」（status!==0）的活动**静默丢掉**，日志从没提过它、末尾还说「未发现进行中的签到」，于是启动脚本前已经完成的签到看起来像被漏掉；现在这类活动会被明确报告为「已签到（监测开始前已完成）」，并且只有活动集合变化时才打印一次清单（可签到/已签到/未开始已结束/状态异常），排查"检测不到"时一眼就能看到接口到底返回了什么；另外「今天没有课堂」会带上接口最近的课堂标题，便于分辨是真的没有还是标题日期被过滤。详情页新增「立即更新」——检查到新版本后点一下就能打开油猴安装页，确认即覆盖安装（半自动，仍不由脚本在后台偷偷替换）；为此仓库除 `理工小助手.js` 外同时发布一份内容完全相同的 `理工小助手.user.js`，因为油猴只把 .user.js 结尾的链接识别成可安装脚本。v5.7.5：更新检查更可靠、更好懂——结果里同时显示远端与本地版本号（以前只显示本地，看到「已是最新」分不清是真版本相同还是压根没取到远端），并新增 jsDelivr 镜像源作为 raw.githubusercontent.com 的备用（该域名在国内常被 DNS 污染）。v5.7.4：彻底修复「刷课跳过中间视频」的真正根因——点击模拟函数同时执行了 dispatchEvent('click') 与 el.click()，同一个 click 处理函数被调用两次，「下一页」按钮的 goNextPage 于是连翻两页、中间那页视频整段被跳过；现在 mousedown/mouseup 照发而 click 只触发一次（该函数是全局公共的，播放/暂停、倍速按钮、提交答题、弹窗按钮一并修好）。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -35,14 +35,21 @@
 // ==/UserScript==
 
 /*
- * 更新策略：**默认不自动更新**
+ * 更新策略：**默认不自动更新，但提供「一键更新」（半自动）**
  *
- * 这里刻意不写 @updateURL / @downloadURL —— 那会让油猴在后台强制自动更新，
- * 用户没有选择权。改为在「详情页 → 作者与许可」提供一个「自动检查更新」开关：
- *   · 默认关闭；开启后打开该页才会去 GitHub 读取最新 @version 并提示；
- *   · 只做「检查 + 提示」，绝不自动替换脚本，更新动作始终由用户决定。
+ * 这里刻意不写 @updateURL / @downloadURL —— 那会让油猴在后台静默替换脚本，
+ * 用户没有选择权。改为在「详情页 → 作者与许可」提供：
+ *   · 「自动检查更新」开关（默认关闭）：开启后打开该页才会去 GitHub / jsDelivr
+ *     读取远端 @version 并比较，只做检查与提示；
+ *   · 「立即更新」按钮：**发现新版本时才出现**，点了打开油猴安装页，
+ *     由用户在油猴弹窗里按下确认后覆盖安装 —— 替换动作始终由用户决定。
  *
- * 代价：修复不会自动送到老用户手里 —— 用户需要自行重装一次、或主动打开该开关。
+ * ⚠ 安装链接必须指向 `.user.js`：油猴只把「.user.js 结尾」的链接识别成可安装脚本
+ *   （官方 FAQ Q102），指向 `理工小助手.js` 只会显示源码、不弹安装页。
+ *   所以仓库根目录除了 `理工小助手.js` 还发布一份内容**完全相同**的
+ *   `理工小助手.user.js`，由 tools/prepare-publish.mjs 生成，并强制校验两者 sha256 一致。
+ *
+ * 代价：脚本自身不会把修复推给老用户 —— 老用户仍需点一次「立即更新」并确认。
  */
 
 (function () {
@@ -73,6 +80,9 @@
     const DETAIL_TAB_KEY = 'dgut_detail_tab';
     /* 自动检查更新：默认关闭（true 才会去 GitHub 比对版本号，只提示不自动替换） */
     const AUTO_UPDATE_KEY = 'dgut_auto_update_check';
+    /* 详细调试日志开关（默认关闭）。调试版 dist/理工小助手-调试版.js 会强制打开：
+       打开后刷课决策链路里每一个分支、每一个 try/catch 都会进面板日志框，重点行标红。 */
+    const DBG_KEY = 'dgut_debug_verbose';
     const DEBUG = true;
 
     /* ============================================================
@@ -662,6 +672,9 @@
         .dgut-log-line.log-success { color: var(--dgut-success); }
         .dgut-log-line.log-warn { color: var(--dgut-error); }
         .dgut-log-line.log-muted { color: var(--dgut-on-surface-variant); }
+        /* 调试日志的重点行：标红；error 加粗，hot 再加底色，便于在几百行里一眼扫到 */
+        .dgut-log-line.log-error { color: #ff3b30; font-weight: 700; }
+        .dgut-log-line.log-hot { color: #ff3b30; font-weight: 700; background: rgba(255,59,48,.14); border-radius: 3px; }
         .dgut-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 13px; border: none; border-radius: 999px; background: var(--dgut-secondary-container); color: var(--dgut-on-secondary-container); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, box-shadow .15s; font-family: inherit; }
         .dgut-btn:hover { background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
         .dgut-btn:disabled { opacity: .6; cursor: progress; }
@@ -1175,40 +1188,113 @@
         rec.push({ time: Date.now(), course, kind, attendanceID: activity && activity.relationId, status: result.status, message: result.message });
         GM_setValue(SIGN_LOG_KEY, rec.slice(-500));
     }
+    /**
+     * 归类一个课堂活动（纯函数，回归测试会抽取它真正执行）。
+     *
+     * ★ 修复「监测开始前就已经签到的活动检测不到」：
+     *   旧实现在循环里写死一行
+     *     `if (relationType !== 1 || state !== 1 || status !== 0) continue;`
+     *   「进行中且未签到」能过，但**「进行中且已签到」被静默丢掉** ——
+     *   日志从没说过看见过它，末尾还显示「未发现进行中的签到」。
+     *   于是用户在脚本启动前（或别人代签/换设备签）已经完成的签到，
+     *   看起来就像是脚本完全没检测到。
+     *
+     * 返回：
+     *   'skip'     不是签到活动（目录/课件等）
+     *   'inactive' 未开始或已结束（state !== 1）
+     *   'unsigned' 进行中且未签到 → 需要自动提交
+     *   'signed'   进行中且已签到 → 只报告，不重复提交
+     *   'unknown'  进行中但 status 不是数字 → 接口字段可能变了，喊出来让用户反馈
+     */
+    function signActivityState(activity) {
+        if (!activity || Number(activity.relationType) !== 1) return 'skip';
+        if (Number(activity.state) !== 1) return 'inactive';
+        const st = Number(activity.status);
+        if (st === 0) return 'unsigned';
+        if (Number.isFinite(st)) return 'signed';
+        return 'unknown';
+    }
     async function signPollOnce(course) {
-        if (gSignMonitor) gSignMonitor.busy = true;
+        /* 捕获当前监测对象：stopSignMonitor 会把模块变量置 null，
+           但正在 await 中的这一轮仍要用它记状态，不能在中途踩空。 */
+        const mon = gSignMonitor;
+        if (mon) mon.busy = true;
         try {
             const d = new Date();
             const today = `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-            let classrooms = [];
-            try { classrooms = (await signFetchClassrooms(course.id)).filter(c => c.title && c.title.includes(today)); }
+            let all = [];
+            try { all = await signFetchClassrooms(course.id); }
             catch (e) { signLog(`[${course.name}] 读取课堂列表失败：${e.message}`, 'warn'); return; }
-            if (!classrooms.length) { signLog(`[${course.name}] 本轮完成：今天没有课堂，无需签到。`, 'muted'); return; }
-            let activeCount = 0, newCount = 0;
+            const classrooms = all.filter(c => c.title && c.title.includes(today));
+            if (!classrooms.length) {
+                /* 旧实现只说「今天没有课堂」，用户分不清是「真没有」还是
+                   「课堂标题里没有今天的日期、被这一行过滤掉了」。带上接口最近的标题。 */
+                const seen = all.slice(0, 3).map(c => c.title).filter(Boolean).join('、');
+                signLog(`[${course.name}] 本轮完成：今天（${today}）没有课堂，无需签到。` + (seen ? `接口最近 3 个课堂：${seen}` : '（接口未返回任何课堂）'), 'muted');
+                return;
+            }
+            let unsignedTotal = 0, submitted = 0, signedNew = 0, unknownNew = 0;
             for (const classroom of classrooms) {
                 let activities = [];
                 try { activities = await signFetchActivities(classroom.id); }
                 catch (e) { signLog(`[${course.name}] 读取课堂活动失败：${e.message}`, 'warn'); continue; }
-                for (const activity of activities) {
-                    if (activity.relationType !== 1 || activity.state !== 1 || activity.status !== 0) continue;
-                    activeCount++;
+
+                const buckets = { skip: [], inactive: [], unsigned: [], signed: [], unknown: [] };
+                for (const activity of activities) buckets[signActivityState(activity)].push(activity);
+
+                /* 活动集合/状态有变化时打印一次清单：不刷屏，又能把
+                   「接口到底返回了什么」直接摆在用户眼前 —— 排查"检测不到"最需要的就是它。 */
+                const sig = activities.map(a => `${a.relationId}:${a.state}:${a.status}:${a.scoreType}`).sort().join(',');
+                if (mon && mon.lastSig[classroom.id] !== sig) {
+                    mon.lastSig[classroom.id] = sig;
+                    signLog(`[${course.name}] 课堂《${classroom.title}》共 ${activities.length} 个活动：可签到 ${buckets.unsigned.length} · 已签到 ${buckets.signed.length} · 未开始/已结束 ${buckets.inactive.length}${buckets.unknown.length ? ` · 状态异常 ${buckets.unknown.length}` : ''}`, 'muted');
+                }
+
+                /* ① 已签到（含「脚本启动前就已签」）：报告出来，每个活动只报一次，绝不重复提交 */
+                for (const activity of buckets.signed) {
+                    const key = `signed_${activity.relationId}_${classroom.id}`;
+                    if (!mon || mon.reported.has(key)) continue;
+                    mon.reported.add(key);
+                    signedNew++;
+                    const kind = signKindText(activity.scoreType);
+                    signLog(`✓ [${course.name}] ${kind}：已签到（监测开始前已完成，无需补签）`, 'success');
+                    writeSignRecord(course.name, kind, activity, { status: 'already', message: '监测开始前已签到，无需处理' });
+                }
+
+                /* ② 状态字段异常：把原文摆出来，便于发现接口变更 */
+                for (const activity of buckets.unknown) {
+                    const key = `unknown_${activity.relationId}_${classroom.id}`;
+                    if (!mon || mon.reported.has(key)) continue;
+                    mon.reported.add(key);
+                    unknownNew++;
+                    signLog(`? [${course.name}] relationId=${activity.relationId} 的 status 不是数字（state=${activity.state}, status=${activity.status}），已跳过；请把这一行反馈给作者。`, 'warn');
+                }
+
+                /* ③ 进行中且未签到：自动提交（原有逻辑不变） */
+                for (const activity of buckets.unsigned) {
+                    unsignedTotal++;
                     const key = `${activity.relationId}_${classroom.id}`;
-                    if (gSignMonitor.checked.has(key)) continue;
-                    newCount++;
+                    if (!mon || mon.checked.has(key)) continue;
+                    submitted++;
                     signLog(`[${course.name}] 发现 ${signKindText(activity.scoreType)}，正在处理…`, 'info');
                     let result;
                     try { result = await signSubmit(course, classroom.id, activity); }
                     catch (e) { result = { ok: false, kind: signKindText(activity.scoreType), message: e.message }; }
-                    if (result.skip) { signLog(`[${course.name}] ${result.kind}：${result.message}`, 'warn'); gSignMonitor.checked.add(key); writeSignRecord(course.name, result.kind, activity, { status: 'skipped', message: result.message }); continue; }
-                    if (result.ok) { gSignMonitor.checked.add(key); signLog(`? [${course.name}] ${result.kind}：${result.already ? '已签到过' : '签到成功'}`, 'success'); }
+                    if (result.skip) { signLog(`[${course.name}] ${result.kind}：${result.message}`, 'warn'); mon.checked.add(key); writeSignRecord(course.name, result.kind, activity, { status: 'skipped', message: result.message }); continue; }
+                    if (result.ok) { mon.checked.add(key); signLog(`✓ [${course.name}] ${result.kind}：${result.already ? '已签到过' : '签到成功'}`, 'success'); }
                     else signLog(`× [${course.name}] ${result.kind}：${result.message}${result.raw ? '（服务端原文：' + result.raw + '）' : ''}`, 'warn');
                     writeSignRecord(course.name, result.kind, activity, result);
                 }
             }
-            if (activeCount === 0) signLog(`[${course.name}] 本轮完成：未发现进行中的签到。`, 'muted');
-            else if (newCount === 0) signLog(`[${course.name}] 本轮完成：签到活动已处理，继续等待。`, 'muted');
+            if (unsignedTotal === 0) {
+                if (signedNew) signLog(`[${course.name}] 本轮完成：今日 ${signedNew} 个签到在监测开始前已完成，无需补签。`, 'muted');
+                else if (unknownNew) signLog(`[${course.name}] 本轮完成：有 ${unknownNew} 个活动状态字段异常，已跳过（见上方告警）。`, 'warn');
+                else signLog(`[${course.name}] 本轮完成：未发现进行中的签到。`, 'muted');
+            } else if (submitted === 0) {
+                signLog(`[${course.name}] 本轮完成：签到活动已处理，继续等待。`, 'muted');
+            }
         } finally {
-            if (gSignMonitor) gSignMonitor.busy = false;
+            if (mon) mon.busy = false;
         }
     }
     function startSignMonitor() {
@@ -1216,12 +1302,12 @@
         const course = gSignCourses.find(c => String(c.id) === String(cfg.selectedCourseId));
         if (!course) { showStatus(errFull(ERR.SIGN_NO_COURSE), true); return; }
         if (gSignUserIdConfidence === 'low') {
-            showToastCard('? userid 置信度低', '当前 userid 来自成员列表兜底，可能与登录用户不符。请在签到设置中手动填写 userid 后再启动。', '', 12000);
+            showToastCard('⚠ userid 置信度低', '当前 userid 来自成员列表兜底，可能与登录用户不符。请在签到设置中手动填写 userid 后再启动。', '', 12000);
             showStatus(errFull(ERR.SIGN_USERID_LOWCONF), true);
             return;
         }
         stopSignMonitor(true);
-        gSignMonitor = { timer: null, checked: new Set(), running: true, course, busy: false };
+        gSignMonitor = { timer: null, checked: new Set(), reported: new Set(), lastSig: {}, running: true, course, busy: false };
         const interval = Math.max(2, Number(cfg.pollInterval) || 5);
         signLog(`开始监测《${course.name}》，每 ${interval} 秒检查一次。`, 'success');
         signLog(`当前 userid: ${gSignUserId}（来源：${gSignUserIdSource}，置信度：${gSignUserIdConfidence}）`, 'muted');
@@ -1450,14 +1536,73 @@
          参考实现 v1.6.9 只调用一次 n.click()。
          现在保证 click 只触发一次（mousedown/mouseup 仍照发，部分站点依赖它们）。 */
     function pgTriggerMouseSequence(el) {
-        if (!el) return;
-        ['mousedown', 'mouseup'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) {} });
+        if (!el) { dbg('click', '目标为空，忽略本次点击'); return; }
+        if (dbgOn()) dbgHot('click', '模拟点击 → ' + pgElDesc(el));
+        ['mousedown', 'mouseup'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) { dbgErr('click', n + ' 派发失败: ' + ((e && e.message) || e)); } });
         try {
-            if (typeof el.click === 'function') el.click();
-            else el.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
-        } catch (e) {}
+            if (typeof el.click === 'function') { el.click(); dbg('click', 'click() 已调用一次（单次触发，不会连翻）'); }
+            else { el.dispatchEvent(new Event('click', { bubbles: true, cancelable: true })); dbg('click', '该元素无 click()，改为派发 click 事件'); }
+        } catch (e) { dbgErr('click', 'click() 失败: ' + ((e && e.message) || e)); }
     }
     function pgLog(tag, message, detail) { try { if (typeof debugLog === 'function') debugLog(tag, message, detail); } catch (e) {} }
+
+    /* ============================================================
+     * 详细调试日志（dbg）
+     * ------------------------------------------------------------
+     * 用途：排查「反馈者那里跳页、我这儿正常」这类复现不了的问题。
+     * 打开「刷课 → 详细调试日志」后，决策链路里**每一个分支**、
+     * **每一个 try/catch** 都会往面板日志框打一行：
+     *   dbg()    普通行（灰）
+     *   dbgHot() 重点行（**标红加粗带底色**）：每个决策与每次翻页
+     *   dbgErr() 异常行（**标红加粗**）
+     * 默认关闭；dist/理工小助手-调试版.js 会强制打开。
+     * ============================================================ */
+    let gDbgCache = null, gDbgCacheAt = 0;
+    function dbgOn() {
+        const now = Date.now();
+        if (gDbgCache === null || now - gDbgCacheAt > 1000) {
+            try { gDbgCache = GM_getValue(DBG_KEY, false) === true; } catch (e) { gDbgCache = false; }
+            gDbgCacheAt = now;
+        }
+        return gDbgCache;
+    }
+    function dbgSet(on) {
+        gDbgCache = !!on; gDbgCacheAt = Date.now();
+        try { GM_setValue(DBG_KEY, !!on); } catch (e) {}
+    }
+    function dbgFmt(v) {
+        try {
+            if (v === undefined) return 'undefined';
+            if (v === null) return 'null';
+            if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+            if (typeof v === 'string') return JSON.stringify(v.length > 60 ? v.slice(0, 60) + '…' : v);
+            if (Array.isArray(v)) return '[' + v.length + ' 项' + (v.length && v.length <= 8 ? ': ' + v.join(',') : '') + ']';
+            if (typeof v === 'object') return '{' + Object.keys(v).slice(0, 6).join(',') + '}';
+            return String(v);
+        } catch (e) { return '?'; }
+    }
+    function dbg(section, msg) { if (dbgOn()) chLog('〔' + section + '〕' + msg, 'muted'); }
+    function dbgHot(section, msg) { if (dbgOn()) chLog('〔' + section + '〕▼ ' + msg, 'hot'); }
+    function dbgErr(section, msg) { if (dbgOn()) chLog('〔' + section + '〕✗ ' + msg, 'error'); }
+    /** 给可能抛错的代码加调试：返回值与异常都记账；关闭调试时行为与原来完全一致 */
+    function dbgTry(section, label, fn) {
+        if (!dbgOn()) { try { return fn(); } catch (e) { return undefined; } }
+        try { const r = fn(); dbg(section, label + ' → 正常返回 ' + dbgFmt(r)); return r; }
+        catch (e) { dbgErr(section, label + ' → 抛错: ' + ((e && e.message) || e)); return undefined; }
+    }
+    /** 元素的可读描述，用于日志 */
+    function pgElDesc(el) {
+        try {
+            if (!el || !el.tagName) return String(el);
+            const id = el.id ? '#' + el.id : '';
+            let cls = '';
+            if (typeof el.className === 'string' && el.className) {
+                cls = '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.');
+            }
+            const txt = typeof pgReText === 'function' ? pgReText(el.textContent || '').slice(0, 18) : '';
+            return el.tagName.toLowerCase() + id + cls + (txt ? ' 「' + txt + '」' : '');
+        } catch (e) { return '?'; }
+    }
     /* 运行日志：内存 + GM 双备份，关闭/重开面板、切换视图、刷新页面后都不会丢 */
     const CH_LOG_MAX = 400;
     const CH_LOG_KEY = 'dgut_course_log';
@@ -2023,43 +2168,59 @@
         const now = Date.now();
         const cfg = getCourseHelperConfig();
         pgTouchPageDwell();
+        /* 调试（标红）：每一次「翻页」都记下来，并写清是谁发起的、当时的时间戳。
+           反馈者日志里如果这里的行数 > 实际页数，就说明确实多翻了。 */
+        dbgHot('翻页', '请求翻页。原因="' + (reason || '') + '" | 当前页="' + (pgPageId() || '?') + '" | 距上次翻页=' + (gPgLastAdvanceAt ? (now - gPgLastAdvanceAt) + 'ms' : '从未'));
         if (!cfg.autoNext) {
             if (!gPgNextWarned) { gPgNextWarned = true; chLog('「自动翻页」已关闭：停留当前页，仅播放与答题。', 'muted'); }
+            dbg('翻页', '被拦下：自动翻页开关关闭');
             return false;
         }
         gPgNextWarned = false;
-        if (now - gPgPageChangeAt < PG_PAGE_DWELL_MS) return false;
-        if (now - gPgLastAdvanceAt < PG_ADVANCE_COOLDOWN_MS) return false;
+        if (now - gPgPageChangeAt < PG_PAGE_DWELL_MS) { dbg('翻页', '被拦下：本页停留时间不足 PG_PAGE_DWELL_MS=' + PG_PAGE_DWELL_MS + 'ms（已经过 ' + (now - gPgPageChangeAt) + 'ms）'); return false; }
+        if (now - gPgLastAdvanceAt < PG_ADVANCE_COOLDOWN_MS) { dbg('翻页', '被拦下：距上次翻页不足冷却 PG_ADVANCE_COOLDOWN_MS=' + PG_ADVANCE_COOLDOWN_MS + 'ms（已经过 ' + (now - gPgLastAdvanceAt) + 'ms）'); return false; }
         const pid = pgPageId();
-        if (pid && pid === gPgAdvancePageId && now - gPgLastAdvanceAt < PG_SAME_PAGE_GUARD_MS) return false;
+        if (pid && pid === gPgAdvancePageId && now - gPgLastAdvanceAt < PG_SAME_PAGE_GUARD_MS) { dbg('翻页', '被拦下：同一页 ' + pid + ' 的重复翻页保护中（距上次 ' + (now - gPgLastAdvanceAt) + 'ms）'); return false; }
         let btn = document.querySelector('.next-page-btn.cursor');
+        dbg('翻页', '查找 .next-page-btn.cursor → ' + (btn ? '命中' : '未命中，回退到所有 .next-page-btn'));
         if (!btn) {
             const all = Array.from(document.querySelectorAll('.next-page-btn'));
+            dbg('翻页', '页面里 .next-page-btn 共 ' + all.length + ' 个；可用性: ' + all.map(b => (b.disabled || b.classList.contains('disabled')) ? '禁用' : '可用').join('/'));
             btn = all.find(b => !b.disabled && !b.classList.contains('disabled')) || null;
         }
         if (btn) {
+            dbgHot('翻页', '✔ 点击「下一页」按钮 → ' + pgElDesc(btn));
             pgTriggerMouseSequence(btn);
             gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
             gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期，期间不评估新页
+            dbgHot('翻页', '已翻页：静默期 ' + PG_AFTER_ADVANCE_SETTLE_MS + 'ms（到 ' + new Date(gPgSettleUntil).toLocaleTimeString('zh-CN') + '），期间不评估新页');
             return true;
         }
         const nextPage = pgNextCatalogPage();
+        dbg('翻页', '页内无「下一页」按钮 → 查目录里的下一节：' + (nextPage ? '找到「' + pgReText(nextPage.textContent) + '」' : '没找到'));
         if (nextPage) {
             chLog('本专题已无「下一页」，从目录跳转到：' + (pgReText(nextPage.textContent) || '下一节'), 'info');
+            dbgHot('翻页', '✔ 点击目录项跳转 → ' + pgElDesc(nextPage));
             pgTriggerMouseSequence(nextPage);
             gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
             gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期
             return true;
         }
+        dbg('翻页', '放弃翻页：已是最后一页或没有下一个未完成页面');
         if (!gPgEndWarned) { gPgEndWarned = true; chLog('已是最后一页，未找到下一个未完成页面（' + (reason || '') + '）。', 'warn'); }
         return false;
     }
     function pgDismissModal() {
         const modal = document.querySelector('.modal.fade.in');
-        if (!modal || !pgVisible(modal)) return false;
+        if (!modal || !pgVisible(modal)) {
+            if (modal) dbg('弹窗', '发现 .modal.fade.in 但不可见（id=' + (modal.id || '?') + '），忽略');
+            return false;
+        }
         const id = modal.id;
-        if (id === 'statModal') { const b = modal.querySelectorAll('.btn-hollow'); if (b.length) b[b.length - 1].click(); return true; }
-        if (id === 'alertModal') { const h = modal.querySelectorAll('.btn-hollow'); (h.length ? h[h.length - 1] : modal.querySelector('.btn-submit'))?.click(); return true; }
+        dbgHot('弹窗', '检测到可见弹窗 id="' + id + '" → 点击关闭/继续按钮（这会推进页面！）');
+        if (id === 'statModal') { const b = modal.querySelectorAll('.btn-hollow'); dbg('弹窗', 'statModal 内 .btn-hollow 共 ' + b.length + ' 个，点击最后一个'); if (b.length) b[b.length - 1].click(); return true; }
+        if (id === 'alertModal') { const h = modal.querySelectorAll('.btn-hollow'); dbg('弹窗', 'alertModal 内 .btn-hollow 共 ' + h.length + ' 个，优先最后一个，否则 .btn-submit'); (h.length ? h[h.length - 1] : modal.querySelector('.btn-submit'))?.click(); return true; }
+        dbg('弹窗', '未知弹窗 id="' + id + '"，不做处理');
         return false;
     }
 
@@ -2238,21 +2399,26 @@
     }
 
     function pgLogic() {
-        if (!gCourseHelper || !gCourseHelper.running) return;
-        if (pgDismissModal()) return;
+        if (!gCourseHelper || !gCourseHelper.running) { dbg('tick', '未运行，跳过本轮'); return; }
+        dbg('tick', '──── 本轮开始 ────');
+        if (pgDismissModal()) { dbgHot('tick', '本轮结束：先处理了弹窗（弹窗按钮可能推进页面，直接 return）'); return; }
         pgTouchPageDwell();
-        if (document.querySelector('.question-setting-panel') || document.querySelector('.question-element-node')) {
-            if (Date.now() < gPgQuestionUntil) { chUpdateStatus(); return; }
+        const qPanel = document.querySelector('.question-setting-panel') || document.querySelector('.question-element-node');
+        dbg('tick', '题目区=' + (qPanel ? '有' : '无') + ' · video 数=' + document.querySelectorAll('video').length + ' · 当前页="' + (document.querySelector('.page-name.active') ? pgReText(document.querySelector('.page-name.active').textContent) : '(无 .page-name.active)') + '"');
+        if (qPanel) {
+            if (Date.now() < gPgQuestionUntil) { dbg('分支·题目', '处于题目处理保护期（还剩 ' + (gPgQuestionUntil - Date.now()) + 'ms）→ 只刷状态'); chUpdateStatus(); return; }
             if (!getCourseHelperConfig().autoAnswer) {
                 /* 自动答题关闭：仅在题目都已作答完成（或本页无题）时翻页，不干扰手动作答 */
                 const left = pgQuestionNodes().filter(n => {
                     const w = n.querySelector('.question-wrapper') || n;
                     return !w.classList.contains('finished') && !n.classList.contains('finished');
                 }).length;
+                dbgHot('分支·题目', '自动答题=关：未完成题 ' + left + ' 道 → ' + (left === 0 ? '判定「题目已全部完成」→ 翻页' : '未完成 → 等 3s 再来'));
                 if (left === 0) pgClickNext('题目已全部完成（自动答题关闭）');
                 else { gPgQuestionUntil = Date.now() + 3000; chUpdateStatus(); }
                 return;
             }
+            dbgHot('分支·题目', '自动答题=开 → 交给 pgAnswerAll()');
             pgAnswerAll();
             return;
         }
@@ -2261,17 +2427,19 @@
             const pid = pgPageId();
             if (!pid) {
                 /* 页名读不到（切页瞬间的 DOM 抖动）：本轮不下任何结论，尤其不翻页 */
+                dbg('分支·视频', '页名读不到（切页 DOM 抖动）→ 本轮不下结论、**不翻页**');
                 chUpdateStatus();
                 return;
             }
             /* 翻页后的静默期：参考实现翻页后固定等 1s+3s 才评估新页；
                这段时间 DOM 还停留在旧页，评估必然出错。 */
-            if (Date.now() < gPgSettleUntil) { chUpdateStatus(); return; }
+            if (Date.now() < gPgSettleUntil) { dbg('分支·视频', '翻页静默期内（还剩 ' + (gPgSettleUntil - Date.now()) + 'ms）→ 不评估新页'); chUpdateStatus(); return; }
             /* 只把「属于本页」的 video 当成本页内容。上一页遗留的播放器一律忽略，
                否则会拿上一页那个「已播完」的 video 去证明本页也播完了。 */
             const mine = [];
             videos.forEach((v, idx) => { if (pgVideoOwner(v, pid) === pid) mine.push({ v, idx }); });
             if (mine.length) gPgMediaWaitSince = 0;      // 本页媒体已就位，清掉等待计时
+            dbg('分支·视频', '页面 ' + pid + '：video 共 ' + videos.length + ' 个，归属本页 ' + mine.length + ' 个' + (videos.length !== mine.length ? '（有 ' + (videos.length - mine.length) + ' 个是上一页遗留）' : ''));
 
             if (!mine.length) {
                 /* DOM 里的 video 全是上一页遗留的 → 本页播放器还没渲染出来。
@@ -2280,6 +2448,7 @@
                    宁可多等一会儿，也不能冒任何「跳过本页」的风险。 */
                 if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
                 const waited = Date.now() - gPgMediaWaitSince;
+                dbgHot('分支·视频', '本页播放器尚未出现，已等 ' + Math.round(waited / 1000) + 's / 上限 ' + Math.round(PG_MEDIA_APPEAR_MS / 1000) + 's → ' + (waited < PG_MEDIA_APPEAR_MS ? '继续等，**不翻页**' : '超时，按「本页无视频」翻页'));
                 if (waited < PG_MEDIA_APPEAR_MS) {
                     if (!gPgMediaWaitWarned) {
                         gPgMediaWaitWarned = true;
@@ -2309,6 +2478,9 @@
                     chLog(`本页完成标记：⚠ 未命中站点标记（.video-bottom span:first-child 命中 ${statuses.length} 个，video ${videos.length} 个），只能回退播放器状态判定。`, 'warn');
                 }
             }
+            if (dbgOn()) {
+                dbg('判定·标记', '站点标记=' + dbgFmt(statuses) + ' · 采用站点标记=' + useSite + ' · 本页 video 播放器状态=' + mine.map(m => (m.v.paused ? '暂停' : '播放') + '/' + (Math.round(Number(m.v.currentTime) || 0)) + 's/' + (Math.round(Number(m.v.duration) || 0)) + 's/' + (m.v.ended ? 'ended' : '-')).join(' , '));
+            }
             const isDone = (m) => {
                 if (useSite) {
                     const s = statuses[m.idx];
@@ -2321,20 +2493,24 @@
             for (let i = 0; i < mine.length; i++) {
                 const m = mine[i];
                 const v = m.v;
-                if (isDone(m)) continue;
+                const done = isDone(m);
+                dbg('判定', '本页第 ' + (i + 1) + '/' + mine.length + ' 个 video（全局序号 ' + m.idx + '）：站点标记=' + (useSite ? statuses[m.idx] : '(不可用)') + ' · isDone=' + done);
+                if (done) continue;
 
                 /* 站点还没标记 finished，但播放器已经到结尾了：
                    按参考实现的做法后退 3 秒重播，促使站点补上完成标记；
                    长时间仍不标记则兜底放行，避免永久卡死。 */
                 if (useSite && statuses[m.idx] === 'unviewed' && pgVideoFinished(v)) {
                     if (!gPgLabelStuckSince) gPgLabelStuckSince = Date.now();
-                    if (Date.now() - gPgLabelStuckSince >= PG_LABEL_STUCK_MS) {
+                    const stuck = Date.now() - gPgLabelStuckSince;
+                    dbgHot('判定', '站点标记仍是 unviewed 但播放器已到结尾：已卡 ' + Math.round(stuck / 1000) + 's / 兜底 ' + Math.round(PG_LABEL_STUCK_MS / 1000) + 's → ' + (stuck >= PG_LABEL_STUCK_MS ? '兜底放行翻页' : '后退 3s 重播促使站点补标记'));
+                    if (stuck >= PG_LABEL_STUCK_MS) {
                         gPgLabelStuckSince = 0;
                         chLog('站点长时间未把本页视频标记为已完成，兜底放行翻页。', 'warn');
                         pgClickNext('站点未标记完成，兜底放行');
                         return;
                     }
-                    try { v.currentTime = Math.max(0, (Number(v.duration) || 0) - 3); } catch (e) {}
+                    try { v.currentTime = Math.max(0, (Number(v.duration) || 0) - 3); } catch (e) { dbgErr('判定', '后退 3s 失败: ' + ((e && e.message) || e)); }
                     const pr = v.play(); if (pr && pr.catch) pr.catch(() => {});
                     pgRateGuard.hook(v); pgRateGuard.refresh();
                     chUpdateStatus();
@@ -2352,9 +2528,11 @@
                 if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
                 pgVideoWatchdog(v);                       // 卡死检测
                 if (v.paused) {
+                    dbg('判定', 'video 处于暂停 → 静音并尝试播放（失败则点播放按钮）');
                     v.muted = true;
                     v.play().catch(() => {
                         const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[m.idx];
+                        dbg('判定', 'play() 被拒 → 回退点击播放按钮' + (playBtn ? '' : '（没找到）'));
                         if (playBtn) playBtn.click();
                     });
                 }
@@ -2362,6 +2540,7 @@
                 return;
             }
             /* 本页所有 video 都已完成 */
+            dbgHot('判定', '本页 ' + mine.length + ' 个 video 全部 isDone → 翻页');
             pgClickNext('本页视频已全部完成');
             return;
         }
@@ -2369,13 +2548,19 @@
             /* 播放器容器在、但还没有 video：同样要等本页视频渲染出来，不能急着翻页 */
             if (!gPgMediaWaitSince) gPgMediaWaitSince = Date.now();
             chUpdateStatus();
-            if (Date.now() - gPgMediaWaitSince < PG_MEDIA_APPEAR_MS) return;
+            const held = Date.now() - gPgMediaWaitSince;
+            dbgHot('分支·容器', '有播放器容器但还没有 <video>：已等 ' + Math.round(held / 1000) + 's / 上限 ' + Math.round(PG_MEDIA_APPEAR_MS / 1000) + 's → ' + (held < PG_MEDIA_APPEAR_MS ? '继续等，**不翻页**' : '超时，继续往下走'));
+            if (held < PG_MEDIA_APPEAR_MS) return;
         }
         /* 换页后的保护期：video 和播放器容器可能整体都还没渲染出来。
            旧实现只等 PG_PAGE_DWELL_MS(2s) 就判定「本页无视频」并翻页，
            这正是跳过中间视频的第二条路径。 */
-        if (Date.now() - gPgPageChangeAt < PG_MEDIA_GRACE_MS) { chUpdateStatus(); return; }
+        if (Date.now() - gPgPageChangeAt < PG_MEDIA_GRACE_MS) {
+            dbgHot('分支·无视频', '无 video 无容器，但距上次换页仅 ' + (Date.now() - gPgPageChangeAt) + 'ms（保护期 ' + PG_MEDIA_GRACE_MS + 'ms）→ 继续等，**不翻页**');
+            chUpdateStatus(); return;
+        }
         gPgMediaWaitSince = 0;
+        dbgHot('分支·无视频', '确认本页无视频（已等过保护期）→ 翻页');
         pgClickNext('当前页无视频');
     }
 
@@ -2448,7 +2633,9 @@
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
+                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 🔍 详细调试日志</label>
                 </div>
+                <div class="dgut-hint" style="margin-bottom:10px;">遇到跳页时：打开上面的<b>详细调试日志</b> → 复现一次 → 点<b>复制日志</b>把内容发给开发者。日志里会写明每次翻页是<b>谁发起的、当时的站点标记是什么</b>。</div>
                 <div class="dgut-hint" style="margin-bottom:10px;">取不到答案时<b>不会提交</b>，会重试 <b>${PG_MAX_NO_ANSWER_ROUNDS}</b> 轮；视频停滞超过 <b>${Math.round(PG_STALL_MS / 1000)}s</b> 会自动尝试恢复。</div>
                 <div id="dgut-ch-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
                 <div class="dgut-row dgut-row--end">
@@ -2458,6 +2645,7 @@
                     <button id="dgut-ch-export" class="dgut-btn">${icons.export} 导出题库</button>
                     <button id="dgut-ch-clear" class="dgut-btn">清空题库</button>
                     <button id="dgut-ch-logclear" class="dgut-btn">清空日志</button>
+                    <button id="dgut-ch-logcopy" class="dgut-btn">复制日志</button>
                 </div>
             </div>
             <div class="dgut-card dgut-card--tight">
@@ -2476,6 +2664,16 @@
         ac.querySelector('#dgut-ch-export').onclick = () => { if (getCourseHelperConfig().collectBank) pgCollectBank(); pgExportBank(); };
         ac.querySelector('#dgut-ch-clear').onclick = pgClearBank;
         ac.querySelector('#dgut-ch-logclear').onclick = () => { chLogClear(); chLog('运行日志已清空。', 'muted'); };
+        ac.querySelector('#dgut-ch-logcopy').onclick = async () => {
+            const txt = chLogBuffer().map((r) => `[${r.t}] ${r.text}`).join('\n');
+            try { await navigator.clipboard.writeText(txt); showStatus('运行日志已复制到剪贴板（' + chLogBuffer().length + ' 行）'); }
+            catch (e) { showStatus('复制失败，请手动选中日志框内容'); }
+        };
+        const dbgCb = ac.querySelector('#dgut-ch-debug');
+        if (dbgCb) dbgCb.addEventListener('change', () => {
+            dbgSet(dbgCb.checked);
+            chLog(dbgCb.checked ? '已开启「详细调试日志」：决策链路每个分支与 try/catch 都会记录，重点行标红。复现一次后点「复制日志」发给开发者。' : '已关闭「详细调试日志」。', dbgCb.checked ? 'success' : 'muted');
+        });
         ac.querySelectorAll('#dgut-ch-answer, #dgut-ch-next, #dgut-ch-bank').forEach(cb => {
             cb.addEventListener('change', () => {
                 saveCourseHelperConfig(readCfg());
@@ -4522,22 +4720,54 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.7.5';
+    const ABOUT_VERSION = 'v5.8.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
-     * 更新检查（**可选、默认关闭**）
+     * 更新检查（**可选、默认关闭**）+「一键更新」（半自动）
      *
-     * 不使用油猴的 @updateURL/@downloadURL（那会强制后台自动更新，用户无法选择）；
+     * 不使用油猴的 @updateURL/@downloadURL（那会让油猴在后台静默替换脚本，用户无法选择）；
      * 改为这里提供一个开关，默认关闭。开启后只「拉取远端 @version 做比较并提示」，
-     * 绝不自动替换脚本 —— 更新动作始终由用户决定。
+     * 发现新版本时给一个「立即更新」按钮：点了才打开油猴安装页，
+     * **由用户在油猴弹窗里按下确认**后覆盖安装 —— 替换动作始终由用户决定。
+     *
+     * ⚠ 安装链接必须以 `.user.js` 结尾：油猴只把「.user.js 结尾」的链接识别成可安装
+     *   脚本（官方 FAQ Q102），指向 `理工小助手.js` 只会显示源码、不弹安装页。
+     *   所以仓库根目录同时发布了内容完全相同的 `理工小助手.user.js`，
+     *   由 tools/prepare-publish.mjs 在发布时生成，并强制校验两者字节一致。
      * ------------------------------------------------------------------ */
     /* 多源：raw.githubusercontent.com 在国内常被 DNS 污染/拦截（实测解析到非公网 IP），
-       所以再挂一个 jsDelivr 镜像源；两个都失败才算检查失败。 */
+       所以再挂一个 jsDelivr 镜像源；两个都失败才算检查失败。
+       两个源都指向 .user.js —— 查到版本的那条链接，就是点「立即更新」要打开的安装页。 */
     const UPDATE_SOURCES = [
-        'https://raw.githubusercontent.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js',
-        'https://cdn.jsdelivr.net/gh/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant@main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.js',
+        {
+            name: 'raw.githubusercontent.com',
+            url: 'https://raw.githubusercontent.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.user.js',
+        },
+        {
+            name: 'cdn.jsdelivr.net',
+            url: 'https://cdn.jsdelivr.net/gh/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant@main/%E7%90%86%E5%B7%A5%E5%B0%8F%E5%8A%A9%E6%89%8B.user.js',
+        },
     ];
+    /** 检查失败时也要能手动更新：默认用 jsDelivr（raw 在国内常被 DNS 污染） */
+    const DEFAULT_INSTALL_URL = UPDATE_SOURCES[UPDATE_SOURCES.length - 1].url;
+
+    /** 打开油猴安装页。必须在用户点击的调用栈里同步执行，否则会被弹窗拦截。
+        （用 <a target="_blank"> 而不是 location.href：不要毁掉用户当前页面） */
+    function openInstallPage(url) {
+        try {
+            const a = document.createElement('a');
+            a.href = url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            document.body.appendChild(a);
+            a.click();
+            try { a.remove(); } catch (e) {}
+            return true;
+        } catch (e) {
+            try { window.open(url, '_blank', 'noopener'); return true; } catch (e2) { return false; }
+        }
+    }
 
     function updateCheckOn() { return GM_getValue(AUTO_UPDATE_KEY, false) === true; }
     function cmpVer(a, b) {
@@ -4559,18 +4789,18 @@ self.onmessage = function (e) {
             });
         });
     }
-    /** 依次尝试各镜像源，返回 { version, from }；全部失败才抛错 */
+    /** 依次尝试各镜像源，返回 { version, from, installUrl }；全部失败才抛错 */
     async function fetchRemoteVersion() {
         if (typeof GM_xmlhttpRequest !== 'function') throw new Error('GM_xmlhttpRequest 不可用');
         const errs = [];
-        for (const url of UPDATE_SOURCES) {
+        for (const src of UPDATE_SOURCES) {
             try {
-                const text = await fetchText(url);
+                const text = await fetchText(src.url);
                 const m = /^\/\/\s*@version\s+(\S+)\s*$/m.exec(text);
-                if (!m) { errs.push(new URL(url).hostname + ': 响应里没有 @version'); continue; }
-                return { version: m[1], from: new URL(url).hostname };
+                if (!m) { errs.push(src.name + ': 响应里没有 @version'); continue; }
+                return { version: m[1], from: src.name, installUrl: src.url };
             } catch (e) {
-                errs.push(new URL(url).hostname + ': ' + ((e && e.message) || e));
+                errs.push(src.name + ': ' + ((e && e.message) || e));
             }
         }
         throw new Error(errs.join('；'));
@@ -4618,7 +4848,13 @@ self.onmessage = function (e) {
                     <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);">
                         <label class="dgut-label"><input type="checkbox" id="dgut-auto-update" ${updateCheckOn() ? 'checked' : ''}> 自动检查更新（默认关闭）</label>
                         <button id="dgut-check-update" class="dgut-btn" style="margin-left:8px;">立即检查</button>
-                        <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。本脚本不会后台自动更新，需要更新时请手动重装。</div>
+                        <button id="dgut-do-update" class="dgut-btn" style="margin-left:8px;display:none;">⬆ 立即更新</button>
+                        <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。本脚本<strong>不会在后台自动替换</strong>自己：点「立即检查」看有没有新版本，发现新版后点「立即更新」打开油猴安装页，确认后覆盖安装。</div>
+                        <div style="font-size:11px;color:var(--dgut-on-surface-variant);line-height:1.9;margin-top:4px;">
+                            手动更新入口（油猴只识别 <code>.user.js</code> 结尾的链接）：
+                            <a class="dgut-link" href="${UPDATE_SOURCES[1].url}" target="_blank" rel="noopener noreferrer">jsDelivr</a>
+                            · <a class="dgut-link" href="${UPDATE_SOURCES[0].url}" target="_blank" rel="noopener noreferrer">GitHub raw</a>
+                        </div>
                     </div>
                 </div>
                 <div class="dgut-card">
@@ -4637,10 +4873,12 @@ self.onmessage = function (e) {
             renderGitHubInfo(contentEl.querySelector('#dgut-gh-info'));
 
             /* 更新检查：**默认关闭**；只有开关打开时，打开本页才会自动检查一次。
-               只做「提示」，绝不自动替换脚本。 */
+               只做「检查 + 提示」；替换必须由用户点「立即更新」并在油猴安装页里确认。 */
             const upCb = contentEl.querySelector('#dgut-auto-update');
             const upBtn = contentEl.querySelector('#dgut-check-update');
+            const upGo = contentEl.querySelector('#dgut-do-update');
             const upRes = () => contentEl.querySelector('#dgut-update-result');
+            const IDLE_TEXT = '未开启自动检查。本脚本不会在后台自动替换自己：点「立即检查」看有没有新版本，发现新版后点「立即更新」打开油猴安装页，确认后覆盖安装。';
             const runCheck = async (manual) => {
                 if (!manual && !updateCheckOn()) return;
                 const el = upRes();
@@ -4653,22 +4891,33 @@ self.onmessage = function (e) {
                        否则用户看到「已是最新」时无法判断：是真的一样，
                        还是远端压根没取到、逻辑走偏了。 */
                     if (cmpVer(remote, local) > 0) {
-                        if (el) el.innerHTML = `发现新版本 <b>v${escapeHtml(remote)}</b>（本地 v${escapeHtml(local)}）· <a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">前往 GitHub 更新</a><br><span style="opacity:.7">来源：${escapeHtml(r.from)}</span>`;
-                        showToastCard(`发现新版本 v${remote}`, `本地 v${local}，请到 GitHub 更新`, '本脚本不会自动替换，需要你手动重装一次', 12000);
+                        if (el) el.innerHTML = `发现新版本 <b>v${escapeHtml(remote)}</b>（本地 v${escapeHtml(local)}）· <a class="dgut-link" href="${GITHUB_URL}" target="_blank" rel="noopener noreferrer">查看更新说明</a><br><span style="opacity:.7">来源：${escapeHtml(r.from)}</span>`;
+                        /* 记住「是哪条源真的取到了版本」，点更新时就用同一条源，避免换源又要重新碰运气 */
+                        if (upGo) { upGo.dataset.installUrl = r.installUrl; upGo.style.display = ''; }
+                        showToastCard(`发现新版本 v${remote}`, `本地 v${local}，点「立即更新」一键覆盖安装`, '油猴会弹出安装页，你确认后才会替换', 12000);
                     } else {
                         if (el) el.textContent = `已是最新（远端 v${remote} · 本地 v${local}）· 来源：${r.from}`;
+                        if (upGo) upGo.style.display = 'none';
                     }
                 } catch (e) {
-                    if (el) el.textContent = '检查失败：' + ((e && e.message) || e);
+                    if (el) el.textContent = '检查失败：' + ((e && e.message) || e) + '（仍可用下方手动入口打开安装页）';
+                    if (upGo) upGo.style.display = 'none';
                 }
             };
             if (upCb) upCb.onchange = () => {
                 GM_setValue(AUTO_UPDATE_KEY, upCb.checked === true);
                 showStatus(upCb.checked ? '已开启自动检查更新' : '已关闭自动检查更新');
                 if (upCb.checked) runCheck(true);
-                else { const el = upRes(); if (el) el.textContent = '未开启自动检查。本脚本不会后台自动更新，需要更新时请手动重装。'; }
+                else { const el = upRes(); if (el) el.textContent = IDLE_TEXT; if (upGo) upGo.style.display = 'none'; }
             };
             if (upBtn) upBtn.onclick = () => runCheck(true);
+            if (upGo) upGo.onclick = () => {
+                const url = upGo.dataset.installUrl || DEFAULT_INSTALL_URL;
+                const opened = openInstallPage(url);
+                showStatus(opened
+                    ? '已打开安装页：在油猴弹窗里点「安装 / 重新安装」即可覆盖更新'
+                    : '打开安装页失败，请用下方手动入口', !opened);
+            };
             runCheck(false);
         };
 
