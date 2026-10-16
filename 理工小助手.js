@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.7.2
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
+// @version      5.7.4
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -1407,13 +1407,32 @@
      * 现在：只把「属于当前页」的 video 当成本页内容，并给媒体出现留足等待时间。 */
     const PG_MEDIA_APPEAR_MS = 20000;        // 换页后等待「本页自己的视频」出现的最长时间
     const PG_MEDIA_GRACE_MS = 8000;          // 换页后至少多久内不判定「本页无视频」
+    /* ---- 参考实现（优学院自动静音播放…v1.6.9，公认不跳页）的两个关键做法 ---- */
+    const PG_AFTER_ADVANCE_SETTLE_MS = 4000; // 翻页后静默期：它用 1s + 3s 的等待链，期间不评估新页
+    const PG_LABEL_STUCK_MS = 45000;         // 站点长时间不把视频标记为 finished 时的兜底放行时间
 
     function isCoursePage() { return /learnCourse/i.test(location.pathname) || /learnCourse/i.test(location.href); }
     function getCourseHelperConfig() { return Object.assign({}, DEFAULT_COURSE_HELPER, GM_getValue(COURSE_HELPER_KEY, {}) || {}); }
     function saveCourseHelperConfig(patch) { GM_setValue(COURSE_HELPER_KEY, Object.assign(getCourseHelperConfig(), patch)); }
     function pgVisible(el) { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
     function pgReText(text) { return String(text || '').replace(/<\/?.+?\/?>/g, '').replace(/[\t\n\r]/g, '').replace(/&.*?;/g, '').trim(); }
-    function pgTriggerMouseSequence(el) { if (!el) return; ['mousedown', 'mouseup', 'click'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) {} }); try { if (typeof el.click === 'function') el.click(); } catch (e) {} }
+    /* 模拟一次点击。
+       ★ 关键修复（跳过中间视频的真正原因）：
+         旧实现先 dispatchEvent('click')、再 el.click()，等于把 click 处理函数调用两次
+         （已用假元素实测：只派发=1 次、只 .click()=1 次、两者都做=2 次）。
+         「下一页」按钮 .next-page-btn 是静态常驻元素，绑定 click: goNextPage，
+         于是每次翻页 goNextPage 被调用两遍 → 连翻两页，中间那页的视频整段被跳过。
+         这与完成判定无关，所以之前改判定逻辑完全没用。
+         参考实现 v1.6.9 只调用一次 n.click()。
+         现在保证 click 只触发一次（mousedown/mouseup 仍照发，部分站点依赖它们）。 */
+    function pgTriggerMouseSequence(el) {
+        if (!el) return;
+        ['mousedown', 'mouseup'].forEach(n => { try { el.dispatchEvent(new Event(n, { bubbles: true, cancelable: true })); } catch (e) {} });
+        try {
+            if (typeof el.click === 'function') el.click();
+            else el.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
+        } catch (e) {}
+    }
     function pgLog(tag, message, detail) { try { if (typeof debugLog === 'function') debugLog(tag, message, detail); } catch (e) {} }
     /* 运行日志：内存 + GM 双备份，关闭/重开面板、切换视图、刷新页面后都不会丢 */
     const CH_LOG_MAX = 400;
@@ -1828,6 +1847,9 @@
     let gPgAdvancePageId = '';
     let gPgMediaWaitSince = 0;
     let gPgMediaWaitWarned = false;      // 本页是否已提示过「等本页视频出现」
+    let gPgSettleUntil = 0;              // 翻页后的静默截止时间（参考实现用 1s+3s 等待链）
+    let gPgLabelStuckSince = 0;          // 站点迟迟不把视频标记 finished 的起始时间
+    let gPgSiteMarkLoggedFor = '';       // 已就哪一页打过「站点标记是否可用」的诊断日志
     let gPgPageChangeAt = Date.now();
     let gPgLastPageId = '';
     let gPgEpoch = 0;
@@ -1903,6 +1925,29 @@
         } catch (e) {}
         return false;
     }
+    /* ------------------------------------------------------------------
+     * 站点自己的「每个视频是否看完」标记（关键修复）
+     *
+     * 来源：参考实现「优学院自动静音播放…v1.6.9」（公认不跳页）用的是
+     *   videos        = $('mediaelementwrapper video:first-child')
+     *   videos_status = $('.video-bottom span:first-child')
+     *   span[data-bind] === 'text: $root.i18nMessageText().finished' → 已看完
+     *                     …viewed / …unviewed                       → 没看完
+     * 两组数量必须相等，站点标记才可信。
+     *
+     * 为什么必须用它：换页或播放器复用时，<video> 的 duration / currentTime
+     * 会短暂保留上一页的值，单凭 currentTime 判定「已播完」会误判 —— 这正是
+     * 之前「跳过中间视频」的直接原因。站点自己的 finished 标记不受此影响。
+     * ------------------------------------------------------------------ */
+    function pgVideoSiteStatuses() {
+        return Array.from(document.querySelectorAll('.video-bottom span:first-child')).map(s => {
+            const bind = s.getAttribute('data-bind') || '';
+            if (bind.indexOf('.finished') !== -1) return 'finished';
+            if (bind.indexOf('.viewed') !== -1 || bind.indexOf('.unviewed') !== -1) return 'unviewed';
+            return 'unknown';
+        });
+    }
+
     function pgTouchPageDwell() {
         const pid = pgPageId();
         if (!pid) return gPgLastPageId;      // 暂时取不到页名（DOM 抖动）不算换页，避免打断答题
@@ -1912,9 +1957,11 @@
             gPgQuestionUntil = 0;
             gPgEndWarned = false;
             gPgNextWarned = false;
-            /* 换页后必须重新等待本页媒体：不清空这两个会沿用上一页的等待状态 */
+            /* 换页后必须重新等待本页媒体：不清空这些会沿用上一页的等待状态 */
             gPgMediaWaitSince = 0;
             gPgMediaWaitWarned = false;
+            gPgSettleUntil = 0;
+            gPgLabelStuckSince = 0;
             gPgNoAnswerRounds.delete(pid);
             gPgRetrySince.delete(pid);
         }
@@ -1966,12 +2013,18 @@
             const all = Array.from(document.querySelectorAll('.next-page-btn'));
             btn = all.find(b => !b.disabled && !b.classList.contains('disabled')) || null;
         }
-        if (btn) { pgTriggerMouseSequence(btn); gPgLastAdvanceAt = now; gPgAdvancePageId = pid; return true; }
+        if (btn) {
+            pgTriggerMouseSequence(btn);
+            gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
+            gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期，期间不评估新页
+            return true;
+        }
         const nextPage = pgNextCatalogPage();
         if (nextPage) {
             chLog('本专题已无「下一页」，从目录跳转到：' + (pgReText(nextPage.textContent) || '下一节'), 'info');
             pgTriggerMouseSequence(nextPage);
             gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
+            gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期
             return true;
         }
         if (!gPgEndWarned) { gPgEndWarned = true; chLog('已是最后一页，未找到下一个未完成页面（' + (reason || '') + '）。', 'warn'); }
@@ -2187,6 +2240,9 @@
                 chUpdateStatus();
                 return;
             }
+            /* 翻页后的静默期：参考实现翻页后固定等 1s+3s 才评估新页；
+               这段时间 DOM 还停留在旧页，评估必然出错。 */
+            if (Date.now() < gPgSettleUntil) { chUpdateStatus(); return; }
             /* 只把「属于本页」的 video 当成本页内容。上一页遗留的播放器一律忽略，
                否则会拿上一页那个「已播完」的 video 去证明本页也播完了。 */
             const mine = [];
@@ -2214,30 +2270,75 @@
                 return;
             }
 
-            let i = 0;
-            for (; i < mine.length; i++) {
-                const v = mine[i].v;
-                if (pgVideoFinished(v)) continue;
+            /* 完成判定：优先用站点自己的 .video-bottom 标记（参考实现的做法），
+               只有在拿不到可信标记时才回退到播放器状态（currentTime/ended）。 */
+            const statuses = pgVideoSiteStatuses();
+            const useSite = statuses.length === videos.length;
+            /* 诊断日志：明确说出「站点标记到底能不能用」。
+               如果这里报「未找到站点标记」，说明 .video-bottom 选择器在本页不成立，
+               下面的判定会回退到播放器状态 —— 看到这行就能立刻定位问题。 */
+            if (gPgSiteMarkLoggedFor !== pid) {
+                gPgSiteMarkLoggedFor = pid;
+                if (useSite) {
+                    chLog(`本页完成标记：站点标记可用（命中 ${statuses.length} 个 / video ${videos.length} 个），按站点标记判定是否翻页。`, 'muted');
+                } else {
+                    chLog(`本页完成标记：⚠ 未命中站点标记（.video-bottom span:first-child 命中 ${statuses.length} 个，video ${videos.length} 个），只能回退播放器状态判定。`, 'warn');
+                }
+            }
+            const isDone = (m) => {
+                if (useSite) {
+                    const s = statuses[m.idx];
+                    if (s === 'finished') return true;
+                    if (s === 'unviewed') return false;      // 站点说没看完 → 绝不翻页
+                }
+                return pgVideoFinished(m.v);
+            };
+
+            for (let i = 0; i < mine.length; i++) {
+                const m = mine[i];
+                const v = m.v;
+                if (isDone(m)) continue;
+
+                /* 站点还没标记 finished，但播放器已经到结尾了：
+                   按参考实现的做法后退 3 秒重播，促使站点补上完成标记；
+                   长时间仍不标记则兜底放行，避免永久卡死。 */
+                if (useSite && statuses[m.idx] === 'unviewed' && pgVideoFinished(v)) {
+                    if (!gPgLabelStuckSince) gPgLabelStuckSince = Date.now();
+                    if (Date.now() - gPgLabelStuckSince >= PG_LABEL_STUCK_MS) {
+                        gPgLabelStuckSince = 0;
+                        chLog('站点长时间未把本页视频标记为已完成，兜底放行翻页。', 'warn');
+                        pgClickNext('站点未标记完成，兜底放行');
+                        return;
+                    }
+                    try { v.currentTime = Math.max(0, (Number(v.duration) || 0) - 3); } catch (e) {}
+                    const pr = v.play(); if (pr && pr.catch) pr.catch(() => {});
+                    pgRateGuard.hook(v); pgRateGuard.refresh();
+                    chUpdateStatus();
+                    return;
+                }
+                gPgLabelStuckSince = 0;
+
                 pgRateGuard.hook(v);
                 pgRateGuard.refresh();
                 const rate = pgRateGuard.target;
                 if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate);
                 /* 倍速/播放按钮按「该 video 在全文档中的序号」取，不能用本页子集的下标，
                    否则页面里残留旧播放器时按钮会错位。 */
-                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[mine[i].idx];
+                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[m.idx];
                 if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
                 pgVideoWatchdog(v);                       // 卡死检测
                 if (v.paused) {
                     v.muted = true;
                     v.play().catch(() => {
-                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[mine[i].idx];
+                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[m.idx];
                         if (playBtn) playBtn.click();
                     });
                 }
-                break;
+                chUpdateStatus();
+                return;
             }
-            if (i === mine.length) pgClickNext('本页视频已全部完成');
-            else chUpdateStatus();
+            /* 本页所有 video 都已完成 */
+            pgClickNext('本页视频已全部完成');
             return;
         }
         if (pgHasMediaContainer()) {
