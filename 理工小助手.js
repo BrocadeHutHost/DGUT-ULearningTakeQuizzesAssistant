@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.7.5
+// @version      5.7.6
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.7.5：更新检查更可靠、更好懂——结果里同时显示远端与本地版本号（以前只显示本地，看到「已是最新」分不清是真版本相同还是压根没取到远端），并新增 jsDelivr 镜像源作为 raw.githubusercontent.com 的备用（该域名在国内常被 DNS 污染）。v5.7.4：彻底修复「刷课跳过中间视频」的真正根因——点击模拟函数同时执行了 dispatchEvent('click') 与 el.click()，同一个 click 处理函数被调用两次，「下一页」按钮的 goNextPage 于是连翻两页、中间那页视频整段被跳过；现在 mousedown/mouseup 照发而 click 只触发一次（该函数是全局公共的，播放/暂停、倍速按钮、提交答题、弹窗按钮一并修好）。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -972,23 +972,33 @@
             } catch (e) {}
         }
 
-        // 3. GM_cookie
+        // 3. GM_cookie：**每个域只请求一次**（拿该域全部 cookie，再在本地筛名字）。
+        //    油猴的 cookie 权限是「按域弹窗、用户点一次允许后记住」，
+        //    旧写法是 5 个域 × 8 个 cookie 名 = 40 次调用，用户得点一堆「允许」；
+        //    现在最多 2 个域、每域 1 次请求 —— 通常只弹 1 次。
+        //    另外刻意去掉了 application.dgut.edu.cn 与 www.ulearning.cn：
+        //    userid 不可能只存在于这两处，多问一个域就多一次弹窗。
         if (!uid && typeof GM_cookie !== 'undefined' && GM_cookie.list) {
-            const urls = [location.origin, 'https://lms.dgut.edu.cn', 'https://application.dgut.edu.cn', 'https://ua.dgut.edu.cn', 'https://www.ulearning.cn'];
-            const names = ['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'];
+            const urls = [...new Set([location.origin, 'https://lms.dgut.edu.cn'])];
+            const nameSet = new Set(['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'].map((n) => n.toLowerCase()));
             outer:
             for (const url of urls) {
-                for (const name of names) {
-                    const v = await new Promise((resolve) => {
-                        try {
-                            GM_cookie.list({ url, name }, (cookies, error) => {
-                                if (error || !cookies || !cookies.length) return resolve(null);
-                                const n = Number(cookies[0].value);
-                                resolve(Number.isFinite(n) && n > 0 ? n : null);
-                            });
-                        } catch (e) { resolve(null); }
-                    });
-                    if (v) { uid = v; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium'; break outer; }
+                const cookies = await new Promise((resolve) => {
+                    try {
+                        GM_cookie.list({ url }, (list, error) => {
+                            if (error || !Array.isArray(list)) return resolve([]);
+                            resolve(list);
+                        });
+                    } catch (e) { resolve([]); }
+                });
+                for (const ck of cookies) {
+                    const name = String((ck && ck.name) || '');
+                    if (!nameSet.has(name.toLowerCase())) continue;
+                    const n = Number(ck.value);
+                    if (Number.isFinite(n) && n > 0) {
+                        uid = n; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium';
+                        break outer;
+                    }
                 }
             }
         }
