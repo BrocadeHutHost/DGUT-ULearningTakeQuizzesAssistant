@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.8.1
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。
+// @version      5.8.0
+// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。v5.8.0：修复「签到监测开始前就已签到的活动检测不到」——旧的循环过滤把「进行中且已签到」（status!==0）的活动**静默丢掉**，日志从没提过它、末尾还说「未发现进行中的签到」，于是启动脚本前已经完成的签到看起来像被漏掉；现在这类活动会被明确报告为「已签到（监测开始前已完成）」，并且只有活动集合变化时才打印一次清单（可签到/已签到/未开始已结束/状态异常），排查"检测不到"时一眼就能看到接口到底返回了什么；另外「今天没有课堂」会带上接口最近的课堂标题，便于分辨是真的没有还是标题日期被过滤。详情页新增「立即更新」——检查到新版本后点一下就能打开油猴安装页，确认即覆盖安装（半自动，仍不由脚本在后台偷偷替换）；为此仓库除 `理工小助手.js` 外同时发布一份内容完全相同的 `理工小助手.user.js`，因为油猴只把 .user.js 结尾的链接识别成可安装脚本。另外不再向「当前网站」申请 Cookie 权限：以前脚本会在任意域名弹「允许读取本站 Cookie」的授权框（实测在 chat.deepseek.com 弹出），每访问一个新域名弹一次；现在只在优学院域、且只在优学院环境里申请（非优学院页面干脆不做 Token/userid 自检），一次授权后不再打扰。v5.7.5：更新检查更可靠、更好懂——结果里同时显示远端与本地版本号（以前只显示本地，看到「已是最新」分不清是真版本相同还是压根没取到远端），并新增 jsDelivr 镜像源作为 raw.githubusercontent.com 的备用（该域名在国内常被 DNS 污染）。v5.7.4：彻底修复「刷课跳过中间视频」的真正根因——点击模拟函数同时执行了 dispatchEvent('click') 与 el.click()，同一个 click 处理函数被调用两次，「下一页」按钮的 goNextPage 于是连翻两页、中间那页视频整段被跳过；现在 mousedown/mouseup 照发而 click 只触发一次（该函数是全局公共的，播放/暂停、倍速按钮、提交答题、弹窗按钮一并修好）。v5.7.3：刷课「跳过中间视频」彻底修复——完成判定改为读取站点自己的 .video-bottom 状态标记（finished / viewed / unviewed），不再单凭 <video> 的 currentTime/duration 判断（换页或播放器复用时这两个值会残留上一页的旧值，造成误判跳页）；并加入「翻页后静默期」，与公认不跳页的参考实现 v1.6.9（翻页后固定 1s+3s 再评估）保持一致。v5.7.2：修复两个恶性 bug。(1) 签到「响应失败」——接口成功结构是 {code:1,message:"成功",result:{...}}，旧代码却按 res.status===200/201 判定，导致签到成功也被判失败并把整段 JSON 当报错显示；现已统一按 code/success 归一化判定，认证失败也会带出服务端原文（如「无效的token」）。(2) 刷课跳过中间视频——换页后新页播放器是异步渲染的，DOM 里还留着上一页已播完的 <video>，旧逻辑会据此误判「本页已看完」并立刻再点下一页，把新页视频整段跳过；现在给每个 video 标记归属页、只认属于当前页的播放器，并给本页媒体出现留出等待时间。同时修复同类问题：求是读书同一页每 3 秒重复点翻页、页面未切走就一路跳过中间内容；作业互评与课件答案接口把 HTTP 4xx/5xx 的 JSON 错误体当成成功数据、接口报错被静默显示成「0 条记录/没答案」。v5.7.1：修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。修复关闭主面板再打开后运行日志丢失（日志改为内存+持久化，重开面板/切换视图/刷新页面后自动恢复），新增「清空日志」；修复视频卡死恢复计数被自身时间轴微调重置、永远停在「第 1 次」的问题，恢复阶梯 1→2→3→4 现在会正常升级；自动答题大幅降低漏答：多选合并答案（AB / A、B）自动拆分、判断题/填空/简答/排序统一归一化、题型识别不准时按序兜底填充、缺少 .question-wrapper 或题型标签的题目同样作答，取不到答案的重试预算由约 16 秒放宽到 90 秒，已提交题目不再阻塞翻页。v5.7.0：刷课助手内核重写——答案接口改为真异步等待、自动答题/自动翻页开关真实生效、取不到答案绝不提交（不空交）、视频卡死与加载失败自动分级恢复、专题末页自动从目录寻找下一未完成页、任务代次杜绝重复提交与提前翻页；主面板支持拖拽改变大小、Ctrl+滚轮缩放文字与元素、左侧栏可滚动，最大宽高不超过浏览器窗口。v5.6.0：详情页「作者与许可」新增 GitHub 项目 Star/Fork/Watch 数据与作者、贡献者头像（30 分钟缓存）。v5.5.0：修复动态加载库在沙箱中读不到全局变量导致「mammoth 库未加载」的问题；图片像素处理迁移到 Web Worker 多线程执行；PDF 分片导出支持主线程让出。
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -83,7 +83,7 @@
     /* 详细调试日志开关（默认关闭）。调试版 dist/理工小助手-调试版.js 会强制打开：
        打开后刷课决策链路里每一个分支、每一个 try/catch 都会进面板日志框，重点行标红。 */
     const DBG_KEY = 'dgut_debug_verbose';
-    const DEBUG = false;
+    const DEBUG = true;
 
     /* ============================================================
      * 错误码系统
@@ -287,6 +287,20 @@
         return { isTop, hasVideo, hasVM, hasKo };
     }
 
+    /**
+     * 主机名是否属于优学院环境（DGUT 或 ulearning 域）。
+     *
+     * ⚠ 这个判断的存在意义就是**别在不相关的网站上碰用户数据**：
+     * 本脚本的 @match 是全站通配（任何网站都会运行），而油猴的 Cookie 授权是
+     * 「按域弹窗、点一次记住」—— 只要脚本在某个域上调一次 GM_cookie，
+     * 用户就会看到一个「允许读取本站 Cookie」的确认框。
+     * 在 chat.deepseek.com 上问它要 Cookie，既没有收益，又是纯骚扰。
+     */
+    function isUlearningHost(host) {
+        const h = String(host === undefined ? location.hostname : host);
+        return /(^|\.)dgut\.edu\.cn$/i.test(h) || /(^|\.)ulearning\.cn$/i.test(h);
+    }
+
     if (window.top !== window.self) {
         (function readerFrameBootstrap() {
             const MSG = 'DGUT_SINGLE_FILE_READER_SYNC';
@@ -425,7 +439,7 @@
         });
 
         const host = location.hostname;
-        const isLms = /(^|\.)dgut\.edu\.cn$/i.test(host) || /(^|\.)ulearning\.cn$/i.test(host);
+        const isLms = isUlearningHost(host);
         console.log(TAG, `[自检] 当前域 ${host} ${isLms ? '✓ 属于优学院环境' : '⚠ 不在优学院环境中（部分功能不可用）'}`);
 
         const ifr = detectIframe();
@@ -441,14 +455,25 @@
 
     setTimeout(async function asyncSelfCheck() {
         console.log(TAG, '========== 异步自检开始 ==========');
+        /* ★ 非优学院页面**什么都不查**。
+           以前这里无条件跑 checkAuthToken() + signResolveUserId()，而它们都会调
+           GM_cookie —— 油猴按域弹一次授权框，于是用户每访问一个新网站（例如
+           chat.deepseek.com）都会看到一个「允许脚本读取本站 Cookie」的确认框。
+           在优学院以外的站点上，Token 与 userid 本来就解析不出有意义的结果，
+           所以这里直接跳过：不弹框、不发请求、不碰任何 Cookie。 */
+        if (!isUlearningHost(location.hostname)) {
+            console.log(TAG, `[自检] 当前域 ${location.hostname} 不在优学院环境，跳过 Token / userid 自检（也不会申请任何 Cookie 权限）`);
+            console.log(TAG, '========== 异步自检结束 ==========');
+            return;
+        }
         try {
             const auth = await checkAuthToken();
             if (!auth.present) {
-                console.warn(TAG, `[自检] ? ${errTag(ERR.SIGN_NO_TOKEN)} 未获取到 Token（可能未登录）`);
+                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_NO_TOKEN)} 未获取到 Token（可能未登录）`);
             } else {
                 const expStr = (auth.payload && auth.payload.exp) ? new Date(auth.payload.exp * 1000).toLocaleString() : '无 exp';
-                if (auth.expired) console.warn(TAG, `[自检] ? ${errTag(ERR.SIGN_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
-                else console.log(TAG, `[自检] ? Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
+                if (auth.expired) console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
+                else console.log(TAG, `[自检] ✓ Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
             }
         } catch (e) {}
 
@@ -457,11 +482,11 @@
             if (uid) {
                 const src = gSignUserIdSource || '未知';
                 const conf = gSignUserIdConfidence || '未知';
-                const lvl = conf === 'high' ? '?' : conf === 'medium' ? '?' : '?';
+                const lvl = conf === 'high' ? '🟢' : conf === 'medium' ? '🟡' : '🔴';
                 console.log(TAG, `[自检] ${lvl} userid = ${uid}（来源：${src}，置信度：${conf}）`);
-                if (conf === 'low') console.warn(TAG, `[自检] ? ${errTag(ERR.SIGN_USERID_LOWCONF)}`);
+                if (conf === 'low') console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_USERID_LOWCONF)}`);
             } else {
-                console.warn(TAG, `[自检] ? ${errTag(ERR.SIGN_NO_USERID)} 未获取到 userid`);
+                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_NO_USERID)} 未获取到 userid`);
             }
         } catch (e) {}
 
@@ -932,6 +957,9 @@
      * ============================================================ */
     const SIGN_LMS_BASE = API_HOST + '/courseapi';
     const SIGN_APP_BASE = 'https://application.dgut.edu.cn/classroomapi';
+    /* 唯一会去申请 Cookie 权限的域。油猴按域弹一次授权框，所以这里刻意只留一个：
+       userid 就在优学院的登录 Cookie 里，且 GM_cookie.list 按 URL 读、与当前页面同源无关。 */
+    const SIGN_LMS_ORIGIN = 'https://lms.dgut.edu.cn';
     const SIGN_KINDS = { 0: '选人点名', 1: '二维码签到', 2: '数字码签到', 3: '一键签到' };
     const DEFAULT_SIGN_CONFIG = {
         selectedCourseId: null, selectedCourseName: '',
@@ -985,33 +1013,32 @@
             } catch (e) {}
         }
 
-        // 3. GM_cookie：**每个域只请求一次**（拿该域全部 cookie，再在本地筛名字）。
-        //    油猴的 cookie 权限是「按域弹窗、用户点一次允许后记住」，
-        //    旧写法是 5 个域 × 8 个 cookie 名 = 40 次调用，用户得点一堆「允许」；
-        //    现在最多 2 个域、每域 1 次请求 —— 通常只弹 1 次。
-        //    另外刻意去掉了 application.dgut.edu.cn 与 www.ulearning.cn：
-        //    userid 不可能只存在于这两处，多问一个域就多一次弹窗。
-        if (!uid && typeof GM_cookie !== 'undefined' && GM_cookie.list) {
-            const urls = [...new Set([location.origin, 'https://lms.dgut.edu.cn'])];
+        // 3. GM_cookie：**只问优学院自己的域，而且只问一个**。
+        //    油猴的 Cookie 权限是「按域弹窗、点一次允许后记住」，所以：
+        //      · 旧写法把 location.origin 也塞进列表 → 脚本在所有网站运行，
+        //        于是在任意站点（实测 chat.deepseek.com）都会弹「允许脚本读取本站 Cookie」，
+        //        每访问一个新域名弹一次 —— 既没有收益，又是纯骚扰；
+        //      · 多写一个域就多一次授权弹窗，所以固定只查 lms.dgut.edu.cn：
+        //        GM_cookie.list 是按 URL 读浏览器 Cookie 罐、不受当前页面同源限制，
+        //        不需要问「当前域名」；userid 就在优学院的登录 Cookie 里。
+        //    并且在非优学院环境里**直接不问**：那里不可能有优学院的 userid。
+        if (!uid && isUlearningHost() && typeof GM_cookie !== 'undefined' && GM_cookie.list) {
             const nameSet = new Set(['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'].map((n) => n.toLowerCase()));
-            outer:
-            for (const url of urls) {
-                const cookies = await new Promise((resolve) => {
-                    try {
-                        GM_cookie.list({ url }, (list, error) => {
-                            if (error || !Array.isArray(list)) return resolve([]);
-                            resolve(list);
-                        });
-                    } catch (e) { resolve([]); }
-                });
-                for (const ck of cookies) {
-                    const name = String((ck && ck.name) || '');
-                    if (!nameSet.has(name.toLowerCase())) continue;
-                    const n = Number(ck.value);
-                    if (Number.isFinite(n) && n > 0) {
-                        uid = n; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium';
-                        break outer;
-                    }
+            const cookies = await new Promise((resolve) => {
+                try {
+                    GM_cookie.list({ url: SIGN_LMS_ORIGIN }, (list, error) => {
+                        if (error || !Array.isArray(list)) return resolve([]);
+                        resolve(list);
+                    });
+                } catch (e) { resolve([]); }
+            });
+            for (const ck of cookies) {
+                const name = String((ck && ck.name) || '');
+                if (!nameSet.has(name.toLowerCase())) continue;
+                const n = Number(ck.value);
+                if (Number.isFinite(n) && n > 0) {
+                    uid = n; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium';
+                    break;
                 }
             }
         }
@@ -4720,7 +4747,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.8.1';
+    const ABOUT_VERSION = 'v5.8.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
