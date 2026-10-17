@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.8.2
+// @version      5.9.0
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @grant        GM_cookie
 // @grant        GM_notification
 // @grant        unsafeWindow
@@ -59,6 +60,9 @@
     const TAG = '[优学院助手]';
     const UI_POS_KEY = 'dgut_ui_positions';
     const FAB_POS_KEY = 'dgut_fab_pos';
+    /* 悬浮面板靠边吸附：标准版默认开启 */
+    const FAB_EDGE_SNAP_KEY = 'dgut_fab_edge_snap';
+    const FAB_EDGE_SNAP_DEFAULT = true;
     const PANEL_OPEN_KEY = 'dgut_panel_open_state';
     const VIEW_MODE_KEY = 'dgut_view_mode';
     const THEME_MODE_KEY = 'dgut_theme_mode';
@@ -4747,7 +4751,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.8.2';
+    const ABOUT_VERSION = 'v5.9.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
@@ -5249,6 +5253,190 @@ self.onmessage = function (e) {
         <path class="mini-check" d="M7 12.5l3.2 3.2L17 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     </svg>`;
 
+        /* ============================================================
+     * 悬浮面板「靠边吸附」—— 贴边隐藏 + 鼠标靠近滑出
+     * ------------------------------------------------------------
+     * 开关在油猴 / 脚本猫的「用户脚本命令」菜单里。开启后：
+     *   · 拖到距屏幕左/右边缘 60px 内松手 → 吸附到那一侧，**常态只露出 5px**；
+     *   · 鼠标移到该边缘附近（横向 24px 内、纵向覆盖面板高度）→ 面板滑出；
+     *   · 鼠标移开 → 收回，只留 5px；
+     *   · 拖到屏幕中间松手 → 解除吸附，保持完整显示。
+     * 默认值：标准版 = 开，完整版 = 关（见 FAB_EDGE_SNAP_DEFAULT）。
+     * ============================================================ */
+    const FAB_DOCK_PEEK = 5;         // 吸附后露出的宽度（只露这么一点）
+    const FAB_SNAP_MARGIN = 60;      // 距左右边缘小于该值才吸附
+    const FAB_TRIGGER_PX = 24;       // 鼠标距边缘多少 px 内自动滑出
+    const FAB_DOCK_INSET = 8;        // 滑出后与屏幕边缘的间隙
+    let gFabSnapMenuId = null;
+    let gFabResizeBound = false;
+    let gFabDockBound = false;
+
+    function fabEdgeSnapOn() {
+        try { return GM_getValue(FAB_EDGE_SNAP_KEY, FAB_EDGE_SNAP_DEFAULT) === true; }
+        catch (e) { return FAB_EDGE_SNAP_DEFAULT; }
+    }
+    function fabDockSide(mini) { return (mini && mini.dataset && mini.dataset.dockSide) || ''; }
+    function fabIsShown(mini) { return !!(mini && mini.dataset && mini.dataset.dockShown === '1'); }
+    function fabSize(mini) { return { w: mini.offsetWidth || 56, h: mini.offsetHeight || 56 }; }
+    function fabViewport() {
+        return {
+            vw: window.innerWidth || document.documentElement.clientWidth || 0,
+            vh: window.innerHeight || document.documentElement.clientHeight || 0
+        };
+    }
+    function fabDockTop(mini, top, vh) {
+        const h = fabSize(mini).h;
+        return Math.max(FAB_DOCK_INSET, Math.min(Math.max(FAB_DOCK_INSET, vh - h - FAB_DOCK_INSET), top));
+    }
+    function fabSetX(mini, x) {
+        mini.style.right = 'auto';
+        mini.style.bottom = 'auto';
+        mini.style.left = Math.round(x) + 'px';
+    }
+    /** 吸附到某一侧并收起（只露 FAB_DOCK_PEEK） */
+    function fabDockTo(mini, side) {
+        if (!mini) return;
+        const { w } = fabSize(mini);
+        const { vw, vh } = fabViewport();
+        if (!vw || !vh) return;
+        mini.dataset.dockSide = side;
+        mini.dataset.dockShown = '0';
+        mini.style.top = Math.round(fabDockTop(mini, mini.getBoundingClientRect().top, vh)) + 'px';
+        fabSetX(mini, side === 'left' ? -(w - FAB_DOCK_PEEK) : (vw - FAB_DOCK_PEEK));
+    }
+    /** 滑出完整面板 */
+    function fabDockShow(mini) {
+        if (!mini) return;
+        const side = fabDockSide(mini);
+        if (!side) return;
+        const { w } = fabSize(mini);
+        const { vw } = fabViewport();
+        if (!vw) return;
+        mini.dataset.dockShown = '1';
+        fabSetX(mini, side === 'left' ? FAB_DOCK_INSET : (vw - w - FAB_DOCK_INSET));
+    }
+    /** 收回，只露 FAB_DOCK_PEEK */
+    function fabDockHide(mini) {
+        if (!mini) return;
+        const side = fabDockSide(mini);
+        if (!side) return;
+        const { w } = fabSize(mini);
+        const { vw } = fabViewport();
+        if (!vw) return;
+        mini.dataset.dockShown = '0';
+        fabSetX(mini, side === 'left' ? -(w - FAB_DOCK_PEEK) : (vw - FAB_DOCK_PEEK));
+    }
+    function fabUndock(mini) {
+        if (!mini) return;
+        mini.dataset.dockSide = '';
+        mini.dataset.dockShown = '0';
+        mini.style.right = 'auto';
+        mini.style.bottom = 'auto';
+    }
+    /** 拖动结束 / 创建时调用：靠边就吸附收起，否则解除吸附 */
+    function applyFabSnap(mini) {
+        mini = mini || document.getElementById('dgut-mini-panel');
+        if (!mini) return false;
+        if (!fabEdgeSnapOn()) { fabUndock(mini); return false; }
+        const { vw } = fabViewport();
+        if (!vw) return false;
+        const r = mini.getBoundingClientRect();
+        const distLeft = r.left, distRight = vw - r.right;
+        let side = '';
+        if (distLeft <= FAB_SNAP_MARGIN) side = 'left';
+        else if (distRight <= FAB_SNAP_MARGIN) side = 'right';
+        if (!side) { fabUndock(mini); return false; }
+        fabDockTo(mini, side);
+        return true;
+    }
+    /** 全局 mousemove：靠近边缘就滑出、离开就收回（显隐的唯一来源，避免抖动） */
+    function bindFabDockTrigger() {
+        if (gFabDockBound) return;
+        gFabDockBound = true;
+        document.addEventListener('mousemove', (e) => {
+            const mini = document.getElementById('dgut-mini-panel');
+            if (!mini || !fabEdgeSnapOn()) return;
+            if (mini.dataset.dragging === '1') return;      // 拖动中不干预
+            const side = fabDockSide(mini);
+            if (!side) return;
+            const { h } = fabSize(mini);
+            const { vw } = fabViewport();
+            if (!vw) return;
+            const r = mini.getBoundingClientRect();
+            const inBandY = e.clientY >= r.top - 16 && e.clientY <= r.top + h + 16;
+            const near = side === 'left'
+                ? e.clientX <= Math.max(FAB_TRIGGER_PX, r.right + 8)
+                : e.clientX >= Math.min(vw - FAB_TRIGGER_PX, r.left - 8);
+            if (near && inBandY) {
+                if (!fabIsShown(mini)) fabDockShow(mini);
+            } else if (fabIsShown(mini)) {
+                fabDockHide(mini);
+            }
+        }, { passive: true });
+    }
+    function bindFabResizeSnap() {
+        if (gFabResizeBound) return;
+        gFabResizeBound = true;
+        window.addEventListener('resize', () => {
+            try {
+                const mini = document.getElementById('dgut-mini-panel');
+                if (!mini) return;
+                const side = fabDockSide(mini);
+                if (side) {
+                    const wasShown = fabIsShown(mini);
+                    fabDockTo(mini, side);
+                    if (wasShown) fabDockShow(mini);
+                } else {
+                    applyFabSnap(mini);
+                }
+            } catch (e) {}
+        });
+    }
+    function fabSnapMenuLabel() {
+        return '悬浮面板靠边吸附：' + (fabEdgeSnapOn() ? '开（点击关闭）' : '关（点击开启）');
+    }
+    /** 重新注册菜单项，让标题始终反映当前状态 */
+    function refreshFabEdgeSnapMenu() {
+        try {
+            if (gFabSnapMenuId !== null && typeof GM_unregisterMenuCommand === 'function') {
+                GM_unregisterMenuCommand(gFabSnapMenuId);
+                gFabSnapMenuId = null;
+            }
+        } catch (e) {}
+        try {
+            const id = GM_registerMenuCommand(fabSnapMenuLabel(), toggleFabEdgeSnap);
+            gFabSnapMenuId = (id === undefined) ? null : id;
+        } catch (e) {}
+    }
+    function toggleFabEdgeSnap() {
+        const next = !fabEdgeSnapOn();
+        try { GM_setValue(FAB_EDGE_SNAP_KEY, next); } catch (e) {}
+        refreshFabEdgeSnapMenu();
+        const mini = document.getElementById('dgut-mini-panel');
+        if (mini) {
+            const side = fabDockSide(mini);
+            if (next) {
+                applyFabSnap(mini);
+            } else {
+                fabUndock(mini);                       // 关闭吸附：恢复完整显示
+                if (side) {
+                    const { w } = fabSize(mini);
+                    const { vw } = fabViewport();
+                    fabSetX(mini, side === 'left' ? FAB_DOCK_INSET : Math.max(0, vw - w - FAB_DOCK_INSET));
+                }
+            }
+            try {
+                const rect = mini.getBoundingClientRect();
+                GM_setValue(FAB_POS_KEY, { left: rect.left, top: rect.top, side: fabDockSide(mini) });
+            } catch (e) {}
+        }
+        try {
+            showStatus(next
+                ? '悬浮面板靠边吸附已开启：靠边后只露 5px，鼠标靠近边缘自动滑出'
+                : '悬浮面板靠边吸附已关闭');
+        } catch (e) {}
+    }
+
     function createMiniPanel() {
         if (document.getElementById('dgut-mini-panel')) return;
         const pos = GM_getValue(FAB_POS_KEY, null);
@@ -5259,29 +5447,46 @@ self.onmessage = function (e) {
             mini.style.left = Math.max(0, Math.min(Math.max(0, window.innerWidth - 80), pos.left)) + 'px';
             mini.style.top = Math.max(0, Math.min(Math.max(0, window.innerHeight - 80), pos.top)) + 'px';
         } else { mini.style.right = '20px'; mini.style.bottom = '20px'; }
+        mini.style.transition = 'left .18s ease, top .18s ease';
         mini.innerHTML = MINI_ICON_SVG;
         document.body.appendChild(mini);
+        bindFabResizeSnap();
+        bindFabDockTrigger();
+        if (fabEdgeSnapOn() && pos && pos.side) {
+            fabDockTo(mini, pos.side);          // 恢复上次的吸附侧，直接收起
+        } else {
+            applyFabSnap(mini);                 // 否则按当前位置判断是否靠边
+        }
         let drag = null, moved = false;
         mini.addEventListener('mousedown', (e) => {
+            /* 吸附状态下只露 5px，先滑出完整面板再拖，并关掉过渡避免跟手延迟 */
+            if (fabDockSide(mini)) fabDockShow(mini);
+            mini.dataset.dragging = '1';
+            mini.style.transition = 'none';
             const rect = mini.getBoundingClientRect();
-            drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, ox: rect.left, oy: rect.top };
+            drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, ox: rect.left, oy: rect.top, w: rect.width, h: rect.height };
             moved = false;
             e.preventDefault();
         });
         document.addEventListener('mousemove', (e) => {
             if (!drag) return;
             const nx = e.clientX - drag.dx, ny = e.clientY - drag.dy;
-            if (Math.abs(nx - drag.ox) > 4 || Math.abs(ny - drag.oy) > 4) moved = true;
+            if (!moved && (Math.abs(nx - drag.ox) > 4 || Math.abs(ny - drag.oy) > 4)) moved = true;
             mini.style.right = 'auto'; mini.style.bottom = 'auto';
-            mini.style.left = Math.max(0, Math.min(window.innerWidth - 80, nx)) + 'px';
-            mini.style.top = Math.max(0, Math.min(window.innerHeight - 80, ny)) + 'px';
+            mini.style.left = Math.max(0, Math.min(window.innerWidth - (drag.w || 56), nx)) + 'px';
+            mini.style.top = Math.max(0, Math.min(window.innerHeight - (drag.h || 56), ny)) + 'px';
         });
         document.addEventListener('mouseup', () => {
             if (!drag) return;
             drag = null;
+            mini.dataset.dragging = '';
+            mini.style.transition = 'left .18s ease, top .18s ease';
             if (moved) {
+                applyFabSnap(mini);                  // 靠边就吸附收起到 5px，否则解除吸附
                 const rect = mini.getBoundingClientRect();
-                GM_setValue(FAB_POS_KEY, { left: rect.left, top: rect.top });
+                GM_setValue(FAB_POS_KEY, { left: rect.left, top: rect.top, side: fabDockSide(mini) });
+            } else if (fabDockSide(mini)) {
+                fabDockShow(mini);                   // 只是点了一下：保持滑出，移开鼠标再收回
             }
         });
         mini.addEventListener('click', () => {
@@ -5340,6 +5545,7 @@ self.onmessage = function (e) {
         GM_registerMenuCommand('打开/关闭主面板', () => togglePanel());
         GM_registerMenuCommand('重置面板/悬浮面板位置', resetPanelPositions);
         GM_registerMenuCommand('重置面板大小与缩放', resetPanelSize);
+        refreshFabEdgeSnapMenu();
         GM_registerMenuCommand('优学院课程签到', () => openActionView('sign'));
         GM_registerMenuCommand('优学院刷课助手', () => openActionView('course'));
         GM_registerMenuCommand('作业互评记录', () => openActionView('peer'));
