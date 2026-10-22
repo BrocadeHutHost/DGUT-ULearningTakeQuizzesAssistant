@@ -6,16 +6,26 @@
 > 附加工具：**Markdown 转 Word / PDF、Word 转 PDF、图片压缩处理、手绘电子签名**。
 >
 > 所有文档与图片处理均在浏览器本地完成，内容不上传任何服务器。
->
-> **近期更新：**
-> - **v5.9.0 / v6.3.0：悬浮面板靠边吸附**——把悬浮面板拖到屏幕左/右边缘松手即吸附，
-> - 详情页新增 **GitHub 项目卡片**：Star / Fork / Watch 实时数据与作者、贡献者头像
-> - 新增 **PDF 直接下载**（无需跳转打印对话框）
-> - 新增 **图片工具**（压缩 / 增大文件等常见需求）
-> - **注意：Word 转 PDF 还原度有限，复杂排版可能有偏差，后续持续优化**
-> - 新增 **可选主题美化扩展**：普通用户无需安装，默认界面即开即用（见 [主题美化扩展（可选）](#主题美化扩展可选)）
->
-> 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=brocadehuthost%2Fdgut-ulearningtakequizzesassistant&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+ </picture>
+</a>
+
+**近期更新：**
+- **v5.9.0 / v6.3.0：悬浮面板靠边吸附**——把悬浮面板拖到屏幕左/右边缘松手即吸附，
+- 详情页新增 **GitHub 项目卡片**：Star / Fork / Watch 实时数据与作者、贡献者头像
+- 新增 **PDF 直接下载**（无需跳转打印对话框）
+- 新增 **图片工具**（压缩 / 增大文件等常见需求）
+- **注意：Word 转 PDF 还原度有限，复杂排版可能有偏差，后续持续优化**
+- 新增 **可选主题美化扩展**：普通用户无需安装，默认界面即开即用（见 [主题美化扩展（可选）](#主题美化扩展可选)）
+
+如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
 ---
 
 ## 效果截图
