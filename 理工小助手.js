@@ -4687,6 +4687,9 @@ self.onmessage = function (e) {
         .dgut-gh-people-title { font-size: 12px; font-weight: 700; color: var(--dgut-on-surface); display: flex; align-items: center; gap: 5px; margin-bottom: 8px; }
         .dgut-gh-people-title svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
         .dgut-gh-avatars { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        /* Star History 图表：独占一行、按面板宽度自适应，避免大图撑破卡片 */
+        .dgut-gh-starhistory { flex: 1 0 100%; line-height: 1.5; display: block; margin-top: 4px; }
+        .dgut-gh-starhistory img { display: block; width: 100%; max-width: 720px; height: auto; border-radius: 8px; }
         .dgut-gh-avatar { display: inline-block; position: relative; text-decoration: none; line-height: 0; }
         .dgut-gh-avatar img { display: block; width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 2px solid var(--dgut-surface-2); box-shadow: 0 1px 4px rgba(0,0,0,.22); background: var(--dgut-surface-3); transition: transform .15s, border-color .15s; }
         .dgut-gh-avatar:hover { z-index: 3; }
@@ -4834,12 +4837,12 @@ self.onmessage = function (e) {
                 <div class="dgut-gh-people">
                     <div class="dgut-gh-people-title">${GH_ICONS.person} 作者</div>
                     <div class="dgut-gh-avatars">
-                        <a href="https://www.star-history.com/?repos=brocadehuthost%2Fdgut-ulearningtakequizzesassistant&type=date&legend=top-left">
-                         <picture>
-                           <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&theme=dark&legend=top-left" />
-                           <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
-                           <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
-                         </picture>
+                        <a class="dgut-gh-starhistory" href="https://www.star-history.com/?repos=brocadehuthost%2Fdgut-ulearningtakequizzesassistant&type=date&legend=top-left" target="_blank" rel="noopener noreferrer" title="查看 Star History">
+                            <picture>
+                                <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&theme=dark&legend=top-left" />
+                                <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+                                <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" loading="lazy" referrerpolicy="no-referrer" />
+                            </picture>
                         </a>
                         <a class="dgut-gh-avatar dgut-gh-avatar--owner" href="${escapeHtml(r.owner.html_url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(r.owner.login)} · 项目作者">
                             <img src="${escapeHtml(ghAvatarUrl(r.owner.avatar_url, 96))}" alt="${escapeHtml(r.owner.login)}" referrerpolicy="no-referrer">
