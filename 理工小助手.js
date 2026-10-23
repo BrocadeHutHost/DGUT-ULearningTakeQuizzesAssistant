@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.9.0
+// @version      5.9.1
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -76,6 +76,9 @@
     const BANK_KEY = 'dgut_quiz_bank';
     const PEER_KEY = 'dgut_peer_review_records';
     const READ_CFG_KEY = 'dgut_single_file_helper_config';
+    /* 一次性迁移标记：v5.9.1 之前「默认开启」的旧实现会把 readerAutoStart:true 写进配置
+       （连只点「保存翻页间隔」都会写），升级后要把这种旧值重置一次为「关闭」。 */
+    const READ_AUTOSTART_MIGRATED_KEY = 'dgut_reader_autostart_migrated_v591';
     const READ_RECORDS_KEY = 'dgut_reading_records';
     const DOC_DRAFT_KEY = 'dgut_doc_md_draft';
     const DOC_TITLE_KEY = 'dgut_doc_md_title';
@@ -309,12 +312,23 @@
         (function readerFrameBootstrap() {
             const MSG = 'DGUT_SINGLE_FILE_READER_SYNC';
             const CFG_KEY = 'dgut_single_file_helper_config';
-            const DEF = { readerSec: 30, readerAutoStart: true };
+            const DEF = { readerSec: 30, readerAutoStart: false }; // 默认关闭：只有用户显式点过「开始」（配置里写了 true）才自动恢复翻页
             function readCfg() {
                 let r = {};
-                try { r = GM_getValue(CFG_KEY, DEF) || {}; } catch (e) { r = {}; }
+                try {
+                    /* 一次性迁移（v5.9.1）：旧实现默认「开」，而且连只点「保存翻页间隔」
+                       都会把 readerAutoStart:true 写进配置 —— 升级后必须把这种旧值重置一次，
+                       否则老用户升级了仍然会「没开却自己翻页」。迁移只做一次（标记键），
+                       之后用户自己的选择（点开始=true / 暂停=false）原样保留。 */
+                    if (GM_getValue(READ_AUTOSTART_MIGRATED_KEY, false) !== true) {
+                        const c = GM_getValue(CFG_KEY, {}) || {};
+                        if (c.readerAutoStart === true) { c.readerAutoStart = false; GM_setValue(CFG_KEY, c); }
+                        GM_setValue(READ_AUTOSTART_MIGRATED_KEY, true);
+                    }
+                    r = GM_getValue(CFG_KEY, DEF) || {};
+                } catch (e) { r = {}; }
                 const sec = parseInt(r.readerSec, 10);
-                return { readerSec: sec > 0 ? sec : DEF.readerSec, readerAutoStart: r.readerAutoStart !== false };
+                return { readerSec: sec > 0 ? sec : DEF.readerSec, readerAutoStart: r.readerAutoStart === true };
             }
             let timer = null, lastLoopBack = 0, lastFlipLogAt = 0;
             function rlog(msg) { try { console.log('[求是阅读]', msg); window.parent.postMessage({ type: 'DGUT_LOG', text: msg }, '*'); } catch (e) {} }
@@ -343,15 +357,15 @@
             }
             function stop() { if (timer) { clearInterval(timer); timer = null; } }
             function start(s) { if (timer) return; timer = setInterval(clickNext, s * 1000); rlog('翻页定时器已启动：' + s + '秒/页'); }
-            function apply(s, auto) { stop(); if (auto !== false) start(s); }
+            function apply(s, auto) { stop(); if (auto === true) start(s); }
             window.addEventListener('message', (e) => {
                 const d = e.data;
                 if (!d || d.type !== MSG) return;
                 const sec = parseInt(d.intervalSec, 10) || DEF.readerSec;
-                rlog('收到同步：' + sec + '秒/页，' + (d.autoStart !== false ? '自动' : '暂停'));
+                rlog('收到同步：' + sec + '秒/页，' + (d.autoStart === true ? '自动' : '暂停'));
                 apply(sec, d.autoStart);
             });
-            function tryStart() { const st = readCfg(); apply(st.readerSec, st.readerAutoStart); }
+            function tryStart() { const st = readCfg(); if (st.readerAutoStart === true) apply(st.readerSec, true); }
             if (document.readyState === 'complete') setTimeout(tryStart, 500);
             else window.addEventListener('load', () => setTimeout(tryStart, 1200), { once: true });
         })();
@@ -1551,6 +1565,9 @@
     /* ---- 参考实现（优学院自动静音播放…v1.6.9，公认不跳页）的两个关键做法 ---- */
     const PG_AFTER_ADVANCE_SETTLE_MS = 4000; // 翻页后静默期：它用 1s + 3s 的等待链，期间不评估新页
     const PG_LABEL_STUCK_MS = 45000;         // 站点长时间不把视频标记为 finished 时的兜底放行时间
+    /* ---- 换页瞬间 play() 被拒（AbortError）的有界重试 ---- */
+    const PG_PLAY_RETRY_MAX = 8;             // 最多重试次数
+    const PG_PLAY_RETRY_MS = 400;            // 每次重试间隔
 
     function isCoursePage() { return /learnCourse/i.test(location.pathname) || /learnCourse/i.test(location.href); }
     function getCourseHelperConfig() { return Object.assign({}, DEFAULT_COURSE_HELPER, GM_getValue(COURSE_HELPER_KEY, {}) || {}); }
@@ -1731,41 +1748,77 @@
         if (pgAnswerCache.size > 500) { const first = pgAnswerCache.keys().next().value; pgAnswerCache.delete(first); }
     }
 
+    /* ============================================================
+     * 倍速守卫（realm-safe 版 · 2026-10 修复「倍速设置不生效」）
+     * ------------------------------------------------------------
+     * ★ 旧实现（错误）：
+     *     1) 用 Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'playbackRate')
+     *        取原生 descriptor；
+     *     2) 再用 Object.defineProperty(v,'playbackRate',{get/set}) 在视频元素上装自己的
+     *        own accessor；
+     *     3) 所有读写都走 nativeDescriptor.get.call(v) / nativeDescriptor.set.call(v)。
+     *   这套「跨 realm 的 descriptor 调用」在真实 Tampermonkey 沙箱里可能被代理成
+     *   读回 NaN/undefined 的 getter。此时 `Math.abs(NaN - target) > 0.01` 恒为 false，
+     *   于是 enforce 与 pgLogic 都会**静默跳过 set** —— 不抛错、日志也正常，
+     *   表现正是用户现场看到的「面板 15×、debug 日志 video 一直在播放，
+     *   但 currentTime 33s→83s 用了 52 秒墙钟（≈1×）」。
+     *
+     * ★ 现在：彻底去掉 descriptor / defineProperty，改成**纯属性读写**
+     *   （与参考实现 v1.6.9 的 `ele.playbackRate = N` 一致，任何 realm 下都成立）。
+     *   读取失败时按 0 处理，保证 Math.abs(0 - target) > 0.01 一定成立 → 一定会 set，
+     *   绝不会再出现「静默跳过」。
+     *   站点把倍速改回去时，靠 ratechange + loadedmetadata + canplay + playing
+     *   四个事件监听 + 周期 enforce 一起兜住（站点 mediaelement 的 speed 插件
+     *   会在每次 loadedmetadata 时把 playbackRate 重置回它菜单里的 1.00x）。
+     *   WeakSet 只用来避免重复 addEventListener，不再参与 descriptor。
+     * ============================================================ */
+    function pgRateClamp(v) { const n = Number(v); return Math.max(1, Math.min(16, isFinite(n) && n > 0 ? n : 6)); }
     const pgRateGuard = {
-        target: 6, active: false, hooked: new WeakSet(), nativeDescriptor: null,
+        target: 6, active: false, hooked: new WeakSet(),
         resetHistory: [], learnedInterval: 600, timer: null,
-        init() {
-            this.target = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6));
-            try {
-                this.nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')
-                    || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document.createElement('video')), 'playbackRate');
-            } catch (e) { this.nativeDescriptor = null; }
-        },
-        refresh() { this.target = Math.max(1, Math.min(16, Number(getCourseHelperConfig().rate) || 6)); },
+        init() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
+        refresh() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
         start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
         stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } },
-        get(v) { return this.nativeDescriptor && this.nativeDescriptor.get ? this.nativeDescriptor.get.call(v) : v.playbackRate; },
-        set(v, r) { if (this.nativeDescriptor && this.nativeDescriptor.set) this.nativeDescriptor.set.call(v, r); else v.playbackRate = r; },
+        /* 纯属性读写：不做 descriptor，任何 realm / 沙箱下都成立。
+           读不到/不是有限数 → 返回 0，这样「与 target 的差」必然 > 0.01，一定会触发 set。 */
+        get(v) { try { const r = Number(v && v.playbackRate); return isFinite(r) ? r : 0; } catch (e) { return 0; } },
+        set(v, r) { try { if (v) v.playbackRate = r; } catch (e) {} },
         hookAll() { document.querySelectorAll('video').forEach(v => this.hook(v)); },
         hook(v) {
-            if (this.hooked.has(v)) return; this.hooked.add(v);
+            if (!v || this.hooked.has(v)) return;
+            this.hooked.add(v);
             const self = this;
+            /* 站点重置倍速的时机：ratechange（直接改）、loadedmetadata（speed 插件
+               每次加载都会重置回 1.00x）、canplay/playing（播放器就绪后站点再改一次）。
+               任何一个触发都立刻把倍速改回 target，补上原来 5ms~600ms 的空窗。 */
+            ['ratechange', 'loadedmetadata', 'canplay', 'playing'].forEach(n => {
+                try { v.addEventListener(n, () => { if (self.active) self.applyTo(v, n); }); } catch (e) {}
+            });
+        },
+        applyTo(v, why) {
+            if (!v) return;
+            this.refresh();
+            const t = this.target;
+            if (Math.abs(this.get(v) - t) > 0.01) {
+                this.recordReset();
+                this.set(v, t);
+                try {
+                    if (typeof chLog === 'function') chLog('倍速守卫：把播放速率重设为 ' + t + 'x（触发：' + (why || '定时检查') + '）', 'muted');
+                } catch (e) {}
+                try { if (typeof dbgHot === 'function') dbgHot('倍速', '重设 playbackRate=' + t + '（触发：' + (why || '定时检查') + '）'); } catch (e) {}
+            }
+            this.syncSpeedBtn(v, t);
+        },
+        /* 倍速菜单文字同步（按该 video 在全文档中的序号取，避免残留旧播放器时错位） */
+        syncSpeedBtn(v, t) {
+            if (v === undefined) t = this.target;
             try {
-                if (this.nativeDescriptor && this.nativeDescriptor.set) {
-                    Object.defineProperty(v, 'playbackRate', {
-                        get() { return self.nativeDescriptor.get.call(this); },
-                        set(val) {
-                            if (self.active && Math.abs(val - self.target) > 0.01) {
-                                self.recordReset();
-                                self.nativeDescriptor.set.call(this, val);
-                                Promise.resolve().then(() => { try { self.nativeDescriptor.set.call(this, self.target); } catch (e) {} });
-                            } else self.nativeDescriptor.set.call(this, val);
-                        },
-                        configurable: true, enumerable: true
-                    });
-                }
+                const list = document.querySelectorAll('video');
+                const idx = v ? Array.prototype.indexOf.call(list, v) : 0;
+                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[idx];
+                if (speedBtn && speedBtn.textContent !== t + 'x') speedBtn.textContent = t + 'x';
             } catch (e) {}
-            v.addEventListener('ratechange', () => { if (!this.active) return; try { const cur = this.get(v); if (Math.abs(cur - this.target) > 0.01) { this.recordReset(); this.set(v, this.target); } } catch (e) {} });
         },
         recordReset() {
             this.resetHistory.push(Date.now()); if (this.resetHistory.length > 20) this.resetHistory.shift();
@@ -1775,17 +1828,18 @@
                 if (median > 100 && median < 30000) this.learnedInterval = Math.min(800, Math.max(200, median - 50));
             }
         },
-        scheduleNext() { if (!this.active) return; this.timer = setTimeout(() => { this.enforce(); this.scheduleNext(); }, this.learnedInterval); },
+        scheduleNext() {
+            if (!this.active) return;
+            this.timer = setTimeout(() => { this.enforce(); this.scheduleNext(); }, this.learnedInterval);
+        },
         enforce() {
             if (!this.active) return;
-            this.refresh(); this.hookAll();
-            document.querySelectorAll('video').forEach((v, i) => {
-                if (Math.abs(this.get(v) - this.target) > 0.01) {
-                    this.set(v, this.target);
-                    const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[i];
-                    if (speedBtn && speedBtn.textContent !== this.target + 'x') speedBtn.textContent = this.target + 'x';
-                }
-            });
+            try {
+                this.refresh(); this.hookAll();
+                document.querySelectorAll('video').forEach(v => this.applyTo(v, '定时检查'));
+            } catch (e) {
+                try { if (typeof dbgErr === 'function') dbgErr('倍速', 'enforce 异常: ' + ((e && e.message) || e)); } catch (e2) {}
+            }
         }
     };
 
@@ -2429,6 +2483,65 @@
         } finally { gPgAnswering = false; }
     }
 
+    /* ---------------- 换页瞬间 play() 被拒（AbortError）的有界重试 ----------------
+     * 现象（真实页面实测）：站点换页时会替换/重建 <video>，此刻对旧元素调用 play()
+     * 会被拒绝：
+     *   AbortError: The play() request was interrupted because the media was removed from the document.
+     * 旧实现只回退点一次播放按钮，失败后就等 watchdog 判「播放停滞 12s」才恢复
+     * （用户现场日志里出现过「播放停滞 29s」）。现在改为：
+     *   · 等 canplay / 重新查询「当前这一刻」的 video（元素可能已被替换）；
+     *   · 最多重试 PG_PLAY_RETRY_MAX 次、每次间隔 PG_PLAY_RETRY_MS；
+     *   · 仍失败才回退点击播放按钮。
+     * ------------------------------------------------------------------ */
+    const pgPlayRetryState = new WeakMap();       // video -> { n, timer }
+    function pgVideoByIndex(idx) {
+        const list = document.querySelectorAll('video');
+        return list[idx] || list[0] || null;
+    }
+    function pgPlayFallback(idx) {
+        const btns = document.querySelectorAll('.mejs__button.mejs__playpause-button button');
+        const playBtn = btns[idx] || btns[0] || null;
+        if (playBtn) { try { playBtn.click(); } catch (e) {} }
+    }
+    function pgSchedulePlayRetry(v, idx, st, why) {
+        if (st.n >= PG_PLAY_RETRY_MAX) { pgPlayFallback(idx); return; }
+        if (st.timer) return;
+        st.n++;
+        dbg('播放', 'play() 被拒（' + why + '）→ ' + PG_PLAY_RETRY_MS + 'ms 后第 ' + st.n + '/' + PG_PLAY_RETRY_MAX + ' 次重试');
+        st.timer = setTimeout(() => {
+            st.timer = null;
+            if (!gCourseHelper || !gCourseHelper.running) return;
+            const cur = pgVideoByIndex(idx) || v;
+            if (!cur || cur.isConnected === false) { pgSchedulePlayRetry(v, idx, st, 'element-replaced'); return; }
+            if (!cur.paused) return;
+            if (cur.readyState >= 2) {
+                try { cur.muted = true; } catch (e) {}
+                let p = null;
+                try { p = cur.play(); } catch (e) { p = null; }
+                if (p && typeof p.catch === 'function') {
+                    p.catch((e2) => pgSchedulePlayRetry(cur, idx, st, (e2 && e2.name) || 'retry-failed'));
+                }
+                return;
+            }
+            try { cur.addEventListener('canplay', () => { if (cur.paused) pgTryPlay(cur, idx); }, { once: true }); } catch (e) {}
+            pgSchedulePlayRetry(cur, idx, st, 'wait-canplay');
+        }, PG_PLAY_RETRY_MS);
+    }
+    function pgTryPlay(v, idx) {
+        if (!v || !v.paused) return;
+        const st = pgPlayRetryState.get(v) || { n: 0, timer: null };
+        pgPlayRetryState.set(v, st);
+        try { v.muted = true; } catch (e) {}
+        let pr = null;
+        try { pr = v.play(); } catch (e) { pr = null; }
+        if (!pr || typeof pr.catch !== 'function') { pgSchedulePlayRetry(v, idx, st, 'sync-throw'); return; }
+        pr.catch((err) => {
+            const name = (err && err.name) || '';
+            if (name === 'AbortError' || name === 'NotSupportedError') pgSchedulePlayRetry(v, idx, st, name);
+            else pgPlayFallback(idx);
+        });
+    }
+
     function pgLogic() {
         if (!gCourseHelper || !gCourseHelper.running) { dbg('tick', '未运行，跳过本轮'); return; }
         dbg('tick', '──── 本轮开始 ────');
@@ -2525,7 +2638,7 @@
                 const m = mine[i];
                 const v = m.v;
                 const done = isDone(m);
-                dbg('判定', '本页第 ' + (i + 1) + '/' + mine.length + ' 个 video（全局序号 ' + m.idx + '）：站点标记=' + (useSite ? statuses[m.idx] : '(不可用)') + ' · isDone=' + done);
+                dbg('判定', '本页第 ' + (i + 1) + '/' + mine.length + ' 个 video（全局序号 ' + m.idx + '）：站点标记=' + (useSite ? statuses[m.idx] : '(不可用)') + ' · isDone=' + done + ' · rate=' + dbgFmt(pgRateGuard.get(v)) + 'x(目标 ' + pgRateGuard.target + 'x)');
                 if (done) continue;
 
                 /* 站点还没标记 finished，但播放器已经到结尾了：
@@ -2543,29 +2656,26 @@
                     }
                     try { v.currentTime = Math.max(0, (Number(v.duration) || 0) - 3); } catch (e) { dbgErr('判定', '后退 3s 失败: ' + ((e && e.message) || e)); }
                     const pr = v.play(); if (pr && pr.catch) pr.catch(() => {});
-                    pgRateGuard.hook(v); pgRateGuard.refresh();
+                    try { pgRateGuard.hook(v); pgRateGuard.refresh(); pgRateGuard.applyTo(v, '结尾重播'); } catch (e) { dbgErr('倍速', '结尾重播应用倍速失败: ' + ((e && e.message) || e)); }
                     chUpdateStatus();
                     return;
                 }
                 gPgLabelStuckSince = 0;
 
-                pgRateGuard.hook(v);
-                pgRateGuard.refresh();
-                const rate = pgRateGuard.target;
-                if (Math.abs(pgRateGuard.get(v) - rate) > 0.01) pgRateGuard.set(v, rate);
+                /* 倍速：纯属性读写（不依赖 descriptor），任何 realm 下都成立；
+                   即使这里抛错也只影响本轮，不会让 guard 静默失效。 */
+                try {
+                    pgRateGuard.hook(v);
+                    pgRateGuard.refresh();
+                    pgRateGuard.applyTo(v, '本页视频');
+                } catch (e) { dbgErr('倍速', '应用倍速失败: ' + ((e && e.message) || e)); }
                 /* 倍速/播放按钮按「该 video 在全文档中的序号」取，不能用本页子集的下标，
                    否则页面里残留旧播放器时按钮会错位。 */
-                const speedBtn = document.querySelectorAll('.mejs__button.mejs__speed-button button')[m.idx];
-                if (speedBtn && speedBtn.textContent !== rate + 'x') speedBtn.textContent = rate + 'x';
+                pgRateGuard.syncSpeedBtn(v, pgRateGuard.target);
                 pgVideoWatchdog(v);                       // 卡死检测
                 if (v.paused) {
-                    dbg('判定', 'video 处于暂停 → 静音并尝试播放（失败则点播放按钮）');
-                    v.muted = true;
-                    v.play().catch(() => {
-                        const playBtn = document.querySelectorAll('.mejs__button.mejs__playpause-button button')[m.idx];
-                        dbg('判定', 'play() 被拒 → 回退点击播放按钮' + (playBtn ? '' : '（没找到）'));
-                        if (playBtn) playBtn.click();
-                    });
+                    dbg('判定', 'video 处于暂停(' + Math.round(Number(v.currentTime) || 0) + 's) → 静音并尝试播放；当前倍速=' + pgRateGuard.get(v) + 'x');
+                    pgTryPlay(v, m.idx);
                 }
                 chUpdateStatus();
                 return;
@@ -2967,8 +3077,21 @@
     const READ_NAV_SEC = 3;
     const READ_SAVE_INTERVAL = 30;
     let gRead = null;
-    function rdCfg() { const c = GM_getValue(READ_CFG_KEY, {}) || {}; const s = parseInt(c.readerSec, 10); return { readerSec: s > 0 ? s : 30, autoStart: c.readerAutoStart !== false }; }
-    function rdSaveCfg(patch) { GM_setValue(READ_CFG_KEY, Object.assign({ readerSec: 30, readerAutoStart: true }, GM_getValue(READ_CFG_KEY, {}), patch)); }
+    function rdCfg() {
+        try {
+            /* 一次性迁移（v5.9.1）：旧实现默认「开」、连保存间隔都会写 readerAutoStart:true，
+               升级后把这种旧值重置一次为「关」；之后用户自己点「开始 / 暂停」的选择照常保留。 */
+            if (GM_getValue(READ_AUTOSTART_MIGRATED_KEY, false) !== true) {
+                const old = GM_getValue(READ_CFG_KEY, {}) || {};
+                if (old.readerAutoStart === true) { old.readerAutoStart = false; GM_setValue(READ_CFG_KEY, old); }
+                GM_setValue(READ_AUTOSTART_MIGRATED_KEY, true);
+            }
+        } catch (e) {}
+        const c = GM_getValue(READ_CFG_KEY, {}) || {}; const s = parseInt(c.readerSec, 10); return { readerSec: s > 0 ? s : 30, autoStart: c.readerAutoStart === true };
+    }
+    /* 默认关闭：缺省配置 / 没有 readerAutoStart 键都视为关闭；只有显式 true（用户点过「开始」）才自动恢复。
+       注意默认值必须与 rdCfg、iframe DEF/readCfg 三处保持一致；保存间隔时 patch 只带 readerSec，不得改动开关。 */
+    function rdSaveCfg(patch) { GM_setValue(READ_CFG_KEY, Object.assign({ readerSec: 30, readerAutoStart: false }, GM_getValue(READ_CFG_KEY, {}), patch)); }
     function rdRecords() { return GM_getValue(READ_RECORDS_KEY, {}) || {}; }
     function rdBookTime(k) { return Math.max(0, parseInt(rdRecords()[k], 10) || 0); }
     function rdSetBookTime(k, s) { const r = rdRecords(); r[k] = Math.max(0, Math.floor(s)); GM_setValue(READ_RECORDS_KEY, r); }
@@ -4751,7 +4874,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.9.0';
+    const ABOUT_VERSION = 'v5.9.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
