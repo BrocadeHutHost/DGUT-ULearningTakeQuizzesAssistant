@@ -4834,6 +4834,13 @@ self.onmessage = function (e) {
                 <div class="dgut-gh-people">
                     <div class="dgut-gh-people-title">${GH_ICONS.person} 作者</div>
                     <div class="dgut-gh-avatars">
+                        <a href="https://www.star-history.com/?repos=brocadehuthost%2Fdgut-ulearningtakequizzesassistant&type=date&legend=top-left">
+                         <picture>
+                           <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&theme=dark&legend=top-left" />
+                           <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+                           <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+                         </picture>
+                        </a>
                         <a class="dgut-gh-avatar dgut-gh-avatar--owner" href="${escapeHtml(r.owner.html_url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(r.owner.login)} · 项目作者">
                             <img src="${escapeHtml(ghAvatarUrl(r.owner.avatar_url, 96))}" alt="${escapeHtml(r.owner.login)}" referrerpolicy="no-referrer">
                             <span class="dgut-gh-owner-badge">作者</span>
