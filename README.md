@@ -6,7 +6,17 @@
 > 附加工具：**Markdown 转 Word / PDF、Word 转 PDF、图片压缩处理、手绘电子签名**。
 >
 > 所有文档与图片处理均在浏览器本地完成，内容不上传任何服务器。
->
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=brocadehuthost%2Fdgut-ulearningtakequizzesassistant&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brocadehuthost/dgut-ulearningtakequizzesassistant&type=date&legend=top-left" />
+ </picture>
+</a>
+
 > **近期更新：**
 > - **v5.9.1 / v6.3.1 修复两个「设置不生效」问题**：
 >   - **倍速设置不生效**——旧实现通过跨 realm 的 `HTMLMediaElement.prototype.playbackRate`
