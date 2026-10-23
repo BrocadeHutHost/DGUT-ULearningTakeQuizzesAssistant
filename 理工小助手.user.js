@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.9.1
+// @version      5.9.2
 // @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1772,10 +1772,25 @@
      *   会在每次 loadedmetadata 时把 playbackRate 重置回它菜单里的 1.00x）。
      *   WeakSet 只用来避免重复 addEventListener，不再参与 descriptor。
      * ============================================================ */
+    /* 页面世界（unsafeWindow）里的 <video>：某些油猴沙箱里「对沙箱侧元素赋值 playbackRate」
+       只会改到包装器、改不到真实媒体（页面控制台一直读回 1x 正是这种）。
+       这里提供一条「页面世界句柄」回退路径，并把设置后的读回值写进日志，便于现场定位。 */
+    function pgPageVideoList() {
+        try {
+            if (typeof PAGE_WIN !== 'undefined' && PAGE_WIN && PAGE_WIN.document) {
+                const l = PAGE_WIN.document.querySelectorAll('video');
+                if (l && l.length) return Array.prototype.slice.call(l);
+            }
+        } catch (e) {}
+        try { return Array.from(document.querySelectorAll('video')); } catch (e) { return []; }
+    }
+    function pgVideoDocIndex(v) {
+        try { return Array.prototype.indexOf.call(document.querySelectorAll('video'), v); } catch (e) { return -1; }
+    }
     function pgRateClamp(v) { const n = Number(v); return Math.max(1, Math.min(16, isFinite(n) && n > 0 ? n : 6)); }
     const pgRateGuard = {
         target: 6, active: false, hooked: new WeakSet(),
-        resetHistory: [], learnedInterval: 600, timer: null,
+        resetHistory: [], learnedInterval: 600, timer: null, lastDiagKey: '', lastDiagAt: 0,
         init() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
         refresh() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
         start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
@@ -1783,7 +1798,22 @@
         /* 纯属性读写：不做 descriptor，任何 realm / 沙箱下都成立。
            读不到/不是有限数 → 返回 0，这样「与 target 的差」必然 > 0.01，一定会触发 set。 */
         get(v) { try { const r = Number(v && v.playbackRate); return isFinite(r) ? r : 0; } catch (e) { return 0; } },
-        set(v, r) { try { if (v) v.playbackRate = r; } catch (e) {} },
+        /* 设置倍速：先走沙箱侧赋值；读回不一致时用页面世界句柄再设一次。
+           返回 { ok, pageSet }：ok=沙箱侧赋值是否真的落到媒体上，pageSet=是否用了页面世界回退。 */
+        set(v, r) {
+            let ok = false;
+            try { if (v) v.playbackRate = r; ok = Math.abs(this.get(v) - r) <= 0.01; } catch (e) { ok = false; }
+            let pageSet = false;
+            if (!ok) {
+                try {
+                    const i = pgVideoDocIndex(v);
+                    const l = pgPageVideoList();
+                    const pv = i >= 0 ? l[i] : null;
+                    if (pv && pv !== v) { pv.playbackRate = r; pageSet = true; }
+                } catch (e) {}
+            }
+            return { ok: ok, pageSet: pageSet };
+        },
         hookAll() { document.querySelectorAll('video').forEach(v => this.hook(v)); },
         hook(v) {
             if (!v || this.hooked.has(v)) return;
@@ -1802,11 +1832,34 @@
             const t = this.target;
             if (Math.abs(this.get(v) - t) > 0.01) {
                 this.recordReset();
-                this.set(v, t);
+                const r = this.set(v, t);
+                const real = this.get(v);
+                let pageReal = null;
                 try {
-                    if (typeof chLog === 'function') chLog('倍速守卫：把播放速率重设为 ' + t + 'x（触发：' + (why || '定时检查') + '）', 'muted');
+                    const i = pgVideoDocIndex(v);
+                    const l = pgPageVideoList();
+                    const pv = i >= 0 ? l[i] : null;
+                    const n = Number(pv && pv.playbackRate);
+                    if (isFinite(n)) pageReal = n;
                 } catch (e) {}
-                try { if (typeof dbgHot === 'function') dbgHot('倍速', '重设 playbackRate=' + t + '（触发：' + (why || '定时检查') + '）'); } catch (e) {}
+                const want = why || '定时检查';
+                const fixed = pageReal !== null && Math.abs(pageReal - t) <= 0.01;
+                if (!r.ok || (pageReal !== null && !fixed)) {
+                    /* 沙箱侧赋值没落到真实媒体上：只在状态变化或每 30s 提示一次，避免刷屏 */
+                    const key = t + '|' + want + '|' + (r.ok ? '1' : '0') + '|' + (pageReal === null ? 'null' : Math.round(pageReal * 100));
+                    const now = Date.now();
+                    if (key !== this.lastDiagKey || now - this.lastDiagAt > 30000) {
+                        this.lastDiagKey = key; this.lastDiagAt = now;
+                        try {
+                            if (typeof chLog === 'function') {
+                                chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x' + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '') + (fixed ? '（已用页面世界句柄修正）' : '（仍未生效，可能被站点限速/覆盖）'), 'warn');
+                            }
+                        } catch (e) {}
+                    }
+                } else {
+                    try { if (typeof chLog === 'function') chLog('倍速守卫：把播放速率重设为 ' + t + 'x（触发：' + want + '）', 'muted'); } catch (e) {}
+                    try { if (typeof dbgHot === 'function') dbgHot('倍速', '重设 playbackRate=' + t + '（触发：' + want + '）'); } catch (e) {}
+                }
             }
             this.syncSpeedBtn(v, t);
         },
@@ -4884,7 +4937,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.9.1';
+    const ABOUT_VERSION = 'v5.9.2';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
