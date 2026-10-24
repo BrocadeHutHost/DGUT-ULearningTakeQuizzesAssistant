@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         优学院助手 + 文档工具（签到/刷课/互评/读书 + MD转Word·PDF + 电子签名）
+// @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.9.2
-// @description  优学院课程签到监测 + 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。
+// @version      5.10.0
+// @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
 // @icon         https://lms.dgut.edu.cn/favicon.ico
@@ -14,7 +14,6 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @grant        GM_cookie
-// @grant        GM_notification
 // @grant        unsafeWindow
 // @require      https://cdn.jsdelivr.net/npm/marked/marked.min.js
 // @require      https://code.jquery.com/jquery-1.12.4.min.js
@@ -68,10 +67,8 @@
     const THEME_MODE_KEY = 'dgut_theme_mode';
     const ACCENT_KEY = 'dgut_theme_accent';
     const MANUAL_TOKEN_KEY = 'dgut_manual_token';
-    const MANUAL_USERID_KEY = 'dgut_manual_userid';
-    const SIGN_CONFIG_KEY = 'dgut_sign_config';
-    const SIGN_LOG_KEY = 'dgut_sign_log';
-    const SIGN_USERID_KEY = 'dgut_sign_userid';
+    /* 近七天日程：勾选状态单独存，接口刷新/过期清理都不影响用户已勾选的其他项 */
+    const SCHED_DONE_KEY = 'dgut_schedule_done';
     const COURSE_HELPER_KEY = 'dgut_course_helper_config';
     const BANK_KEY = 'dgut_quiz_bank';
     const PEER_KEY = 'dgut_peer_review_records';
@@ -96,17 +93,13 @@
      * 错误码系统
      * ============================================================ */
     const ERR = {
-        SIGN_NO_TOKEN:      { code: 1131, msg: '无法获取 Token，请先登录优学院' },
-        SIGN_TOKEN_EXPIRED: { code: 1132, msg: 'Token 已过期，请重新登录' },
-        SIGN_NET_FAIL:      { code: 1111, msg: '网络请求失败' },
-        SIGN_TIMEOUT:       { code: 1112, msg: '请求超时' },
-        SIGN_HTTP_ERR:      { code: 1113, msg: 'HTTP 状态码异常' },
-        SIGN_AUTH_FAIL:     { code: 1133, msg: '认证失败（401/403），请重新登录' },
-        SIGN_PARSE_FAIL:    { code: 1121, msg: '返回数据解析失败' },
-        SIGN_NO_USERID:     { code: 1231, msg: '未获取到用户ID (userid)' },
-        SIGN_USERID_LOWCONF:{ code: 1232, msg: 'userid 来自低置信度来源（成员列表），可能与当前登录用户不符，已阻止自动签到' },
-        SIGN_COURSE_EMPTY:  { code: 1221, msg: '课程列表为空' },
-        SIGN_NO_COURSE:     { code: 1251, msg: '尚未选择课程' },
+        API_NO_TOKEN:       { code: 1131, msg: '无法获取 Token，请先登录优学院' },
+        API_TOKEN_EXPIRED:  { code: 1132, msg: 'Token 已过期，请重新登录' },
+        API_NET_FAIL:       { code: 1111, msg: '网络请求失败' },
+        API_TIMEOUT:        { code: 1112, msg: '请求超时' },
+        API_HTTP_ERR:       { code: 1113, msg: 'HTTP 状态码异常' },
+        API_AUTH_FAIL:      { code: 1133, msg: '认证失败（401/403），请重新登录' },
+        API_PARSE_FAIL:     { code: 1121, msg: '返回数据解析失败' },
         COURSE_NO_JQ:       { code: 2241, msg: 'jQuery 未加载' },
         COURSE_NO_KO:       { code: 2242, msg: 'Knockout 视图模型未就绪' },
         COURSE_ANSWER_FAIL: { code: 2221, msg: '答案获取失败' },
@@ -148,7 +141,7 @@
     // 错误码分组（用于详情页表格渲染，避免重复罗列）
     const ERR_GROUPS = [
         { module: '通用 / 框架', codes: [8841, 8842, 8843, 8844, 8845, 8801] },
-        { module: '课程签到',   codes: [1131, 1132, 1133, 1111, 1112, 1113, 1121, 1221, 1231, 1232, 1251] },
+        { module: '日程 / 接口', codes: [1131, 1132, 1133, 1111, 1112, 1113, 1121] },
         { module: '刷课助手',   codes: [2201, 2221, 2241, 2242, 2261, 2262] },
         { module: '作业互评',   codes: [3311, 3321, 3331, 3361] },
         { module: '求是读书',   codes: [4441, 4461] },
@@ -474,37 +467,24 @@
     setTimeout(async function asyncSelfCheck() {
         console.log(TAG, '========== 异步自检开始 ==========');
         /* ★ 非优学院页面**什么都不查**。
-           以前这里无条件跑 checkAuthToken() + signResolveUserId()，而它们都会调
+           以前这里无条件跑 checkAuthToken() + 用户身份解析，而它们都会调
            GM_cookie —— 油猴按域弹一次授权框，于是用户每访问一个新网站（例如
            chat.deepseek.com）都会看到一个「允许脚本读取本站 Cookie」的确认框。
-           在优学院以外的站点上，Token 与 userid 本来就解析不出有意义的结果，
+           在优学院以外的站点上，Token 本来就解析不出有意义的结果，
            所以这里直接跳过：不弹框、不发请求、不碰任何 Cookie。 */
         if (!isUlearningHost(location.hostname)) {
-            console.log(TAG, `[自检] 当前域 ${location.hostname} 不在优学院环境，跳过 Token / userid 自检（也不会申请任何 Cookie 权限）`);
+            console.log(TAG, `[自检] 当前域 ${location.hostname} 不在优学院环境，跳过 Token 自检（也不会申请任何 Cookie 权限）`);
             console.log(TAG, '========== 异步自检结束 ==========');
             return;
         }
         try {
             const auth = await checkAuthToken();
             if (!auth.present) {
-                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_NO_TOKEN)} 未获取到 Token（可能未登录）`);
+                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.API_NO_TOKEN)} 未获取到 Token（可能未登录，日程/互评接口会失败）`);
             } else {
                 const expStr = (auth.payload && auth.payload.exp) ? new Date(auth.payload.exp * 1000).toLocaleString() : '无 exp';
-                if (auth.expired) console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
+                if (auth.expired) console.warn(TAG, `[自检] ⚠ ${errTag(ERR.API_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
                 else console.log(TAG, `[自检] ✓ Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
-            }
-        } catch (e) {}
-
-        try {
-            const uid = await signResolveUserId();
-            if (uid) {
-                const src = gSignUserIdSource || '未知';
-                const conf = gSignUserIdConfidence || '未知';
-                const lvl = conf === 'high' ? '🟢' : conf === 'medium' ? '🟡' : '🔴';
-                console.log(TAG, `[自检] ${lvl} userid = ${uid}（来源：${src}，置信度：${conf}）`);
-                if (conf === 'low') console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_USERID_LOWCONF)}`);
-            } else {
-                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.SIGN_NO_USERID)} 未获取到 userid`);
             }
         } catch (e) {}
 
@@ -680,7 +660,7 @@
         settings: `<svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`,
         close: `<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`,
         add: `<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>`,
-        sign: `<svg viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`,
+        calendar: `<svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>`,
         course: `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`,
         peer: `<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>`,
         read: `<svg viewBox="0 0 24 24"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H6V4h2v8l2.5-1.5L13 12V4h5v16z"/></svg>`,
@@ -731,11 +711,6 @@
         .dgut-nav-label { font-size: 10px; font-weight: 700; color: var(--dgut-outline); letter-spacing: .6px; padding: 12px 10px 4px; user-select: none; }
         #dgut-status-bar { padding: 6px 12px; font-size: 11px; border-top: 1px solid var(--dgut-outline-variant); background: var(--dgut-surface-2); color: var(--dgut-on-surface-variant); }
         #dgut-status-bar.dgut-status-error { color: var(--dgut-error); background: var(--dgut-error-container); }
-        .dgut-list-box { max-height: 200px; overflow-y: auto; }
-        .dgut-sign-course { display: block; width: 100%; text-align: left; margin-bottom: 4px; padding: 8px 10px; border: 1px solid var(--dgut-outline-variant); border-radius: 10px; background: var(--dgut-surface-3); cursor: pointer; font-size: 13px; color: var(--dgut-on-surface); font-family: inherit; transition: background .15s, border-color .15s, color .15s; }
-        .dgut-sign-course:hover { background: var(--dgut-secondary-container); }
-        .dgut-sign-course.active { border-color: var(--dgut-primary); background: var(--dgut-primary-container); color: var(--dgut-on-primary-container); }
-        .dgut-sign-course .course-meta { color: var(--dgut-on-surface-variant); font-size: 11px; margin-left: 6px; }
         .dgut-peer-card { border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; background: var(--dgut-surface-2); color: var(--dgut-on-surface); border: 1px solid var(--dgut-outline-variant); }
         .dgut-peer-card.peer-low { background: color-mix(in srgb, var(--dgut-error) 14%, var(--dgut-surface-3)); }
         .dgut-peer-card.peer-mid { background: color-mix(in srgb, var(--dgut-warn) 16%, var(--dgut-surface-3)); }
@@ -796,10 +771,6 @@
         .dgut-err-row { display: flex; gap: 12px; padding: 6px 10px; border-bottom: 1px solid var(--dgut-outline-variant); font-size: 12px; line-height: 1.6; }
         .dgut-err-row:last-child { border-bottom: none; }
         .dgut-err-row .dgut-err-code { flex: none; min-width: 60px; }
-        .dgut-conf { font-size: 11px; padding: 1px 6px; border-radius: 999px; font-weight: 600; }
-        .dgut-conf-high { background: var(--dgut-success-container); color: var(--dgut-on-success-container); }
-        .dgut-conf-mid  { background: var(--dgut-warn-container); color: var(--dgut-on-warn-container); }
-        .dgut-conf-low  { background: var(--dgut-error-container); color: var(--dgut-on-error-container); }
         .dgut-link { color: var(--dgut-primary); text-decoration: none; }
         .dgut-link:hover { text-decoration: underline; }
     `);
@@ -862,8 +833,8 @@
      *   · 少数只回 { success: true } 或直接回 result
      *
      * 旧实现只认 res.status === 200/201，于是当接口回 { code: 1 } 时，
-     * 签到其实成功了却被判成失败，并把整段 JSON 当成报错文案糊在日志里
-     * ——这就是用户看到的「签到响应失败」。
+     * 业务其实成功了却被判成失败，并把整段 JSON 当成报错文案糊在日志里
+     * ——这就是用户看到的「接口响应失败」。
      *
      * 现在的原则：
      *   1) 只要能识别出「成功」就算成功，别再把成功误判为失败；
@@ -908,7 +879,7 @@
     /* ------------------------------------------------------------
      * 关于认证（已用真实接口核实，2026-10）：
      *   · 所有业务接口只认请求头 Authorization: <token>（原始值，**不加 Bearer**）
-     *   · application.dgut.edu.cn 的课堂/签到接口**不认 cookie**：
+     *   · application.dgut.edu.cn 的课堂接口**不认 cookie**：
      *     只带 cookie → HTTP 401 + { code:2001, message:"缺少访问token" }
      *     Bearer 前缀  → HTTP 401 + { code:2101, message:"无效的token" }
      *   · Origin/Referer 与 Host 不一致不会被拒（按目标域给只是更规范）
@@ -917,12 +888,12 @@
 
     async function gmFetchEx(url, opts = {}) {
         const token = await getAuthToken();
-        if (!token) throw new Error(errFull(ERR.SIGN_NO_TOKEN));
+        if (!token) throw new Error(errFull(ERR.API_NO_TOKEN));
         const method = String(opts.method || 'GET').toUpperCase();
         const headers = { 'Accept': 'application/json, text/plain, */*' };
 
         /* 修复：旧实现无条件把 Origin/Referer 写成 lms.dgut.edu.cn，
-           但签到接口在 application.dgut.edu.cn。跨站 POST 带着不匹配的
+           但部分接口在 application.dgut.edu.cn。跨站 POST 带着不匹配的
            Origin/Referer 很容易被 WAF 拦掉，表现为「响应失败」。
            现在按目标地址推导，且只写我们信任的域。 */
         let target = null;
@@ -957,580 +928,209 @@
                        现在把服务端自己的 message 带出来（如「缺少访问token」「无效的token」）。 */
                     if (res.status === 401 || res.status === 403) {
                         const why = parsed ? apiMessage(parsed) : text.slice(0, 60);
-                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                        return reject(new Error(errFull(ERR.API_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
-                    if (res.status >= 400) return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status)));
+                    if (res.status >= 400) return reject(new Error(errFull(ERR.API_HTTP_ERR, 'HTTP ' + res.status)));
                     if (!text) return resolve({});                 // 空响应体按空对象处理，不再当解析失败
-                    if (parsed === null) return reject(new Error(errFull(ERR.SIGN_PARSE_FAIL, text.slice(0, 80))));
+                    if (parsed === null) return reject(new Error(errFull(ERR.API_PARSE_FAIL, text.slice(0, 80))));
                     return resolve(parsed);
                 },
-                onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
-                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
+                onerror: () => reject(new Error(errFull(ERR.API_NET_FAIL))),
+                ontimeout: () => reject(new Error(errFull(ERR.API_TIMEOUT)))
             });
         });
     }
 
     /* ============================================================
-     * 签到
+     * 近七天日程（只读）
+     * ------------------------------------------------------------
+     * 数据来源（与完整版同一个接口，2026-10 实测）：
+     *   GET {API_HOST}/courseapi/activitycalendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&lang=zh
+     *   请求头：Authorization: <token>（原始 token，不加 Bearer）；anonymous 请求
+     *   返回：{ total, courseCount, homeworkCount, discussionCount, liveCount, examCount,
+     *           activityList: [{ activityId, activityType, title, ocId, courseName,
+     *                            beginTime, endTime }], courseList: [...] }
+     *   beginTime / endTime 是**毫秒时间戳**。
+     *
+     * 本功能刻意保持极简：
+     *   · 只显示「近 7 天」的活动，按时间升序平铺，不分类、不筛选、不带提醒；
+     *   · 每项一个勾选框，勾上后置灰（勾选状态只存本地）；
+     *   · 过了截止时间自动从列表清理（不通知、不打扰）；
+     *   · 只发只读 GET，不写任何服务端状态。
      * ============================================================ */
-    const SIGN_LMS_BASE = API_HOST + '/courseapi';
-    const SIGN_APP_BASE = 'https://application.dgut.edu.cn/classroomapi';
-    /* 唯一会去申请 Cookie 权限的域。油猴按域弹一次授权框，所以这里刻意只留一个：
-       userid 就在优学院的登录 Cookie 里，且 GM_cookie.list 按 URL 读、与当前页面同源无关。 */
-    const SIGN_LMS_ORIGIN = 'https://lms.dgut.edu.cn';
-    const SIGN_KINDS = { 0: '选人点名', 1: '二维码签到', 2: '数字码签到', 3: '一键签到' };
-    const DEFAULT_SIGN_CONFIG = {
-        selectedCourseId: null, selectedCourseName: '',
-        pollInterval: 5, saveLog: true,
-        lat: 23.0432, lng: 113.3993, address: '东莞理工学院'
-    };
-    const p2 = (n) => String(n).padStart(2, '0');
-    let gSignCourses = [];
-    let gSignUserId = null;
-    let gSignUserIdSource = null;
-    let gSignUserIdConfidence = null;
-    let gSignMonitor = null;
+    const SCHED_WINDOW_DAYS = 7;
+    const SCHED_REFRESH_MS = 5 * 60 * 1000;
+    let gSchedItems = null, gSchedFetchedAt = 0, gSchedLoading = false, gSchedError = '', gSchedTimer = null;
 
-    function getSignConfig() { return Object.assign({}, DEFAULT_SIGN_CONFIG, GM_getValue(SIGN_CONFIG_KEY, {}) || {}); }
-    function saveSignConfig(patch) { GM_setValue(SIGN_CONFIG_KEY, Object.assign(getSignConfig(), patch)); }
-    function signKindText(t) { return SIGN_KINDS[t] || '未知签到'; }
+    GM_addStyle(`
+        .dgut-sched-list { display: flex; flex-direction: column; gap: 6px; max-height: 430px; overflow-y: auto; }
+        .dgut-sched-item { border: 1px solid var(--dgut-outline-variant); border-radius: 10px; background: var(--dgut-surface-2); padding: 8px 10px; transition: opacity .15s, background .15s; }
+        .dgut-sched-item:hover { background: var(--dgut-surface-3); }
+        .dgut-sched-item.is-done { opacity: .45; }
+        .dgut-sched-item.is-done .dgut-sched-title { text-decoration: line-through; }
+        .dgut-sched-item label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+        .dgut-sched-item input[type="checkbox"] { margin-top: 2px; flex: none; accent-color: var(--dgut-primary); }
+        .dgut-sched-main { flex: 1; min-width: 0; }
+        .dgut-sched-line { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; font-size: 13px; line-height: 1.55; color: var(--dgut-on-surface); }
+        .dgut-sched-time { flex: none; font-family: Consolas, "Courier New", monospace; font-size: 12px; font-weight: 700; color: var(--dgut-primary); white-space: nowrap; }
+        .dgut-sched-title { flex: 1; min-width: 0; word-break: break-all; }
+        .dgut-sched-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--dgut-on-surface-variant); word-break: break-all; }
+    `);
 
-    async function signResolveUserId() {
-        if (gSignUserId) return gSignUserId;
-
-        const manual = Number(GM_getValue(MANUAL_USERID_KEY, 0));
-        if (Number.isFinite(manual) && manual > 0) {
-            gSignUserId = manual; gSignUserIdSource = '手动覆盖'; gSignUserIdConfidence = 'high';
-            return manual;
-        }
-
-        let uid = null;
-
-        // 1. JWT payload（最可靠）
-        try {
-            const token = await getAuthToken();
-            const p = token ? parseJwt(token) : null;
-            if (p) {
-                const v = p.userid || p.userId || p.uid || p.id || p.sub;
-                const n = Number(v);
-                if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'JWT'; gSignUserIdConfidence = 'high'; }
-            }
-        } catch (e) {}
-
-        // 2. document.cookie
-        if (!uid) {
-            try {
-                const ck = document.cookie || '';
-                const names = ['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'];
-                for (const name of names) {
-                    const m = ck.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)', 'i'));
-                    if (!m) continue;
-                    const n = Number(decodeURIComponent(m[1]));
-                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'document.cookie'; gSignUserIdConfidence = 'medium'; break; }
-                }
-            } catch (e) {}
-        }
-
-        // 3. GM_cookie：**只问优学院自己的域，而且只问一个**。
-        //    油猴的 Cookie 权限是「按域弹窗、点一次允许后记住」，所以：
-        //      · 旧写法把 location.origin 也塞进列表 → 脚本在所有网站运行，
-        //        于是在任意站点（实测 chat.deepseek.com）都会弹「允许脚本读取本站 Cookie」，
-        //        每访问一个新域名弹一次 —— 既没有收益，又是纯骚扰；
-        //      · 多写一个域就多一次授权弹窗，所以固定只查 lms.dgut.edu.cn：
-        //        GM_cookie.list 是按 URL 读浏览器 Cookie 罐、不受当前页面同源限制，
-        //        不需要问「当前域名」；userid 就在优学院的登录 Cookie 里。
-        //    并且在非优学院环境里**直接不问**：那里不可能有优学院的 userid。
-        if (!uid && isUlearningHost() && typeof GM_cookie !== 'undefined' && GM_cookie.list) {
-            const nameSet = new Set(['userid', 'userId', 'USERID', 'userID', 'uid', 'user_id', 'studentid', 'studentId'].map((n) => n.toLowerCase()));
-            const cookies = await new Promise((resolve) => {
-                try {
-                    GM_cookie.list({ url: SIGN_LMS_ORIGIN }, (list, error) => {
-                        if (error || !Array.isArray(list)) return resolve([]);
-                        resolve(list);
-                    });
-                } catch (e) { resolve([]); }
-            });
-            for (const ck of cookies) {
-                const name = String((ck && ck.name) || '');
-                if (!nameSet.has(name.toLowerCase())) continue;
-                const n = Number(ck.value);
-                if (Number.isFinite(n) && n > 0) {
-                    uid = n; gSignUserIdSource = 'GM_cookie'; gSignUserIdConfidence = 'medium';
-                    break;
-                }
-            }
-        }
-
-        // 4. localStorage
-        if (!uid) {
-            try {
-                const keys = ['userid','userId','USERID','uid','user','userInfo','USER_INFO','loginUser'];
-                for (const k of keys) {
-                    const raw = localStorage.getItem(k);
-                    if (!raw) continue;
-                    let v = raw;
-                    try { const o = JSON.parse(raw); v = o && (o.userid || o.userId || o.id || o.uid || o.studentid); } catch (e) {}
-                    const n = Number(v);
-                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = 'localStorage'; gSignUserIdConfidence = 'medium'; break; }
-                }
-            } catch (e) {}
-        }
-
-        // 5. 页面全局变量
-        if (!uid) {
-            try {
-                const cands = [
-                    PAGE_WIN.userInfo, PAGE_WIN.currentUser, PAGE_WIN.user,
-                    PAGE_WIN.gUserInfo, PAGE_WIN.studentUser,
-                    PAGE_WIN.koLearnCourseViewModel && (typeof PAGE_WIN.koLearnCourseViewModel.user === 'function'
-                        ? PAGE_WIN.koLearnCourseViewModel.user() : PAGE_WIN.koLearnCourseViewModel.user),
-                    PAGE_WIN.__INITIAL_STATE__ && PAGE_WIN.__INITIAL_STATE__.user
-                ];
-                for (const c of cands) {
-                    if (!c) continue;
-                    const v = c.userid || c.userId || c.id || c.uid || c.studentid;
-                    const n = Number(v);
-                    if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = '页面全局变量'; gSignUserIdConfidence = 'medium'; break; }
-                }
-            } catch (e) {}
-        }
-
-        // 6. 课程成员列表（低置信度兜底）
-        if (!uid) {
-            try {
-                const cid = (gSignCourses && gSignCourses[0] && gSignCourses[0].id)
-                          || new URL(location.href).searchParams.get('courseId')
-                          || GM_getValue(SIGN_CONFIG_KEY, {}).selectedCourseId;
-                if (cid) {
-                    const res = await gmFetchEx(`${SIGN_LMS_BASE}/classes?ocId=${cid}&pn=1&ps=9999&userId=&keyword=&lang=zh`);
-                    const list = (res && (res.list || (res.result && res.result.list))) || [];
-                    for (const m of list) {
-                        const n = Number(m.userId || m.userid);
-                        if (Number.isFinite(n) && n > 0) {
-                            uid = n; gSignUserIdSource = '成员列表(兜底)'; gSignUserIdConfidence = 'low'; break;
-                        }
-                    }
-                }
-            } catch (e) {}
-        }
-
-        // 7. 缓存
-        if (!uid) {
-            const cached = GM_getValue(SIGN_USERID_KEY, null);
-            const n = Number(cached);
-            if (Number.isFinite(n) && n > 0) { uid = n; gSignUserIdSource = '缓存'; gSignUserIdConfidence = 'medium'; }
-        }
-
-        if (uid) { gSignUserId = uid; GM_setValue(SIGN_USERID_KEY, uid); }
-        return gSignUserId;
+    function schedPad(n) { return String(n).padStart(2, '0'); }
+    function schedDateStr(d) { return `${d.getFullYear()}-${schedPad(d.getMonth() + 1)}-${schedPad(d.getDate())}`; }
+    function schedFmtTime(ts) {
+        const d = new Date(Number(ts));
+        if (isNaN(d.getTime())) return '';
+        return `${schedPad(d.getMonth() + 1)}-${schedPad(d.getDate())} ${schedPad(d.getHours())}:${schedPad(d.getMinutes())}`;
     }
-
-    function signUserIdBadge() {
-        if (!gSignUserId) return '';
-        const conf = gSignUserIdConfidence || 'medium';
-        const cls = conf === 'high' ? 'dgut-conf-high' : conf === 'medium' ? 'dgut-conf-mid' : 'dgut-conf-low';
-        const label = conf === 'high' ? '高' : conf === 'medium' ? '中' : '低';
-        return `<span class="dgut-conf ${cls}" title="来源：${escapeHtml(gSignUserIdSource || '未知')}">userid ${gSignUserId} · 置信度${label}</span>`;
+    function schedDoneMap() { try { return GM_getValue(SCHED_DONE_KEY, {}) || {}; } catch (e) { return {}; } }
+    function schedSetDone(id, done) {
+        const m = schedDoneMap();
+        if (done) m[String(id)] = 1; else delete m[String(id)];
+        try { GM_setValue(SCHED_DONE_KEY, m); } catch (e) {}
     }
-
-    async function signLoadCourses(verbose = true) {
-        if (verbose) startStatusTicker('正在读取优学院课程列表');
+    /* 勾选状态跟着列表一起清理：已过期的条目不留在本地存储里 */
+    function schedPruneDone(items) {
+        const m = schedDoneMap();
+        const alive = new Set((items || []).map(it => String(it.id)));
+        let changed = false;
+        for (const k in m) { if (!alive.has(k)) { delete m[k]; changed = true; } }
+        if (changed) { try { GM_setValue(SCHED_DONE_KEY, m); } catch (e) {} }
+    }
+    /** 把接口返回的原始活动列表归一化成「近七天日程项」（纯函数，便于回归测试） */
+    function schedNormalize(list, now) {
+        now = Number(now) || Date.now();
+        const winEnd = now + SCHED_WINDOW_DAYS * 86400000;
+        const out = [], seen = new Set();
+        if (!Array.isArray(list)) return out;
+        for (const it of list) {
+            if (!it || typeof it !== 'object') continue;
+            const title = String(it.title || it.name || '').trim();
+            if (!title) continue;
+            const begin = Number(it.beginTime != null ? it.beginTime : (it.startTime != null ? it.startTime : it.startTs)) || 0;
+            const finish = Number(it.endTime != null ? it.endTime : (it.dueTime != null ? it.dueTime : (it.deadline != null ? it.deadline : it.endTs))) || 0;
+            const t = finish || begin;                 // 过期判定用「截止时间」，只有开始时间时用开始时间
+            if (!t) continue;
+            if (t < now) continue;                     // 已过期 → 自动清理
+            if (t > winEnd) continue;                  // 超出近七天
+            const rawId = it.activityId != null ? it.activityId : it.id;
+            const id = rawId != null ? String(rawId) : `${title}|${t}`;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push({ id, title, courseName: String(it.courseName || '').trim(), begin, end: finish, t, sortT: (begin && begin > now) ? begin : t });
+        }
+        out.sort((a, b) => a.sortT - b.sortT);
+        return out;
+    }
+    /** 过期自动清理：只留下截止/开始时间还没到的项 */
+    function schedPrune(items, now) {
+        now = Number(now) || Date.now();
+        return (Array.isArray(items) ? items : []).filter(it => it && it.t > now);
+    }
+    function schedRenderStatus(text, isError) {
+        const st = document.getElementById('dgut-sched-status');
+        if (!st) return;
+        if (isError) st.innerHTML = `<span style="color:var(--dgut-error);">${escapeHtml(text)}</span>`;
+        else st.textContent = text;
+    }
+    async function schedFetch(force) {
+        if (gSchedLoading) return;
+        if (!force && gSchedItems && Date.now() - gSchedFetchedAt < SCHED_REFRESH_MS) { renderScheduleList(); return; }
+        if (!isUlearningHost(location.hostname)) {
+            gSchedError = '请先在优学院页面（lms.dgut.edu.cn / ua.dgut.edu.cn）打开面板，再查看日程。';
+            renderScheduleList();
+            return;
+        }
+        gSchedLoading = true; gSchedError = '';
+        schedRenderStatus('正在读取近七天日程…');
         try {
-            const res = await gmFetchEx(`${SIGN_LMS_BASE}/courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=50`);
-            const list = (res && (res.courseList || (res.result && res.result.courseList))) || [];
-            gSignCourses = list.map(c => ({ id: c.id, name: c.name || '未命名课程', teacherName: c.teacherName || '' }));
-            await signResolveUserId();
-            if (verbose) { stopStatusTicker(); showStatus(`已读取 ${gSignCourses.length} 门课程`); }
-            if (gSignMonitor) renderSignViewRefreshCourses();
-            return gSignCourses;
+            const now = new Date();
+            const start = schedDateStr(now);
+            const stop = schedDateStr(new Date(now.getTime() + SCHED_WINDOW_DAYS * 86400000));
+            const res = await gmFetchEx(`${API_HOST}/courseapi/activitycalendar?startDate=${start}&endDate=${stop}&lang=zh`);
+            const raw = (res && (res.activityList || res.result || res.list || (res.data && (res.data.list || res.data.items)))) || [];
+            if (!Array.isArray(raw)) throw new Error('接口返回结构异常：' + apiRaw(res));
+            gSchedItems = schedNormalize(raw, Date.now());
+            gSchedFetchedAt = Date.now();
+            schedPruneDone(gSchedItems);
         } catch (e) {
-            if (verbose) { stopStatusTicker(); showStatus('读取课程失败：' + e.message, true); }
-            return gSignCourses;
-        }
-    }
-    async function signFetchClassrooms(courseId) {
-        const res = await gmFetchEx(`${SIGN_LMS_BASE}/wisdomClassroom/student/getClassroomList?ocId=${courseId}&status=&pageNum=1&pageSize=10&order=0&lang=zh`);
-        /* 修复：旧实现只在 res.code === 1 时取值，其它情况静默返回空数组，
-           于是接口报错会被显示成「今天没有课堂」，用户完全看不到真实原因。 */
-        if (!apiOk(res)) throw new Error('课堂列表接口返回异常：' + (apiMessage(res) || apiRaw(res)));
-        const list = (res.result && res.result.list) || (res.data && res.data.list) || res.list || [];
-        return list.map(c => ({ id: c.id, title: c.title || '' }));
-    }
-    async function signFetchActivities(classroomId) {
-        const res = await gmFetchEx(`${SIGN_APP_BASE}/wisdomClassroom/student/classroomActivitys?classroomId=${classroomId}&pageNum=1&pageSize=999`);
-        if (!apiOk(res)) throw new Error('课堂活动接口返回异常：' + (apiMessage(res) || apiRaw(res)));
-        return (res.result && res.result.list) || (res.data && res.data.list) || res.list || [];
-    }
-    function signAttendanceCode(activity) {
-        if (!activity) return '';
-        for (const k of ['attendanceCode', 'code', 'codeStr', 'signCode', 'checkInCode']) { if (activity[k]) return String(activity[k]); }
-        return '';
-    }
-    /**
-     * 提交签到。
-     *
-     * ★ 修复「签到响应失败」（2026-10 用真实接口核实）：
-     *   优学院接口的成功结构是 `{ code: 1, message: "成功", result: {…} }`，
-     *   **根本没有 status 字段**。旧实现却判定 `res.status === 200 || res.status === 201`，
-     *   导致：
-     *     · 签到其实成功了 → 被判定为失败；
-     *     · 日志里把整段 JSON 当报错文案显示 → 用户看到的就是「响应失败」。
-     *   现在统一走 apiOk()/apiMessage()，并且：
-     *     1) 只在「确实没收到响应」（网络错误/超时）时重试一次，HTTP 已返回的绝不重试，
-     *        避免重复提交；
-     *     2) 判定不出结果时，把服务端原文原样带回日志，让人能看到服务器到底说了什么。
-     */
-    async function signSubmit(course, classroomId, activity) {
-        const scoreType = activity.scoreType;
-        const kind = signKindText(scoreType);
-        const attendanceId = activity.relationId;
-        const code = scoreType === 1 ? signAttendanceCode(activity) : '';
-        if (scoreType === 1 && !code) return { skip: true, kind, message: '未找到二维码签到码，已跳过（脚本不识别教室现场二维码图片）' };
-        if (![1, 2, 3].includes(scoreType)) return { skip: true, kind, message: '当前类型不支持自动处理，已跳过' };
-        const cfg = getSignConfig();
-        const uid = await signResolveUserId();
-        if (!uid) return { ok: false, kind, message: errFull(ERR.SIGN_NO_USERID) };
-        const payload = { attendanceID: attendanceId, classID: classroomId, userID: uid, location: `${cfg.lat},${cfg.lng}`, address: cfg.address, enterWay: 1, attendanceCode: code };
-        let res;
-        try {
-            res = await gmFetchEx(`${SIGN_APP_BASE}/newAttendance/signByStu`, { method: 'POST', data: payload });
-        } catch (e) {
-            const msg = String((e && e.message) || '');
-            if (!/网络请求失败|请求超时/.test(msg)) return { ok: false, kind, message: msg, raw: '' };
-            try {
-                res = await gmFetchEx(`${SIGN_APP_BASE}/newAttendance/signByStu`, { method: 'POST', data: payload });
-            } catch (e2) {
-                return { ok: false, kind, message: String((e2 && e2.message) || msg), raw: '' };
-            }
-        }
-        const codeVal = apiCode(res);
-        const serverMsg = apiMessage(res);
-        const ok = apiOk(res);
-        const already = codeVal === 201 || /已(经)?签|重复/.test(serverMsg);
-        return {
-            ok, already, kind,
-            status: codeVal,
-            message: serverMsg || (ok ? '签到成功' : '') || '接口返回无法识别',
-            raw: ok ? '' : apiRaw(res)
-        };
-    }
-    function signLog(text, level = 'info') {
-        const line = { t: Date.now(), text: String(text), level };
-        const el = document.getElementById('dgut-sign-log');
-        if (el) {
-            const div = document.createElement('div');
-            div.className = `dgut-log-line log-${level || 'info'}`;
-            div.textContent = `[${new Date(line.t).toLocaleTimeString('zh-CN')}] ${line.text}`;
-            el.appendChild(div);
-            while (el.childElementCount > 400) el.removeChild(el.firstChild);
-            el.scrollTop = el.scrollHeight;
-        }
-        log('[签到]', line.text);
-    }
-    function writeSignRecord(course, kind, activity, result) {
-        if (!getSignConfig().saveLog) return;
-        const rec = GM_getValue(SIGN_LOG_KEY, []);
-        rec.push({ time: Date.now(), course, kind, attendanceID: activity && activity.relationId, status: result.status, message: result.message });
-        GM_setValue(SIGN_LOG_KEY, rec.slice(-500));
-    }
-    /**
-     * 归类一个课堂活动（纯函数，回归测试会抽取它真正执行）。
-     *
-     * ★ 修复「监测开始前就已经签到的活动检测不到」：
-     *   旧实现在循环里写死一行
-     *     `if (relationType !== 1 || state !== 1 || status !== 0) continue;`
-     *   「进行中且未签到」能过，但**「进行中且已签到」被静默丢掉** ——
-     *   日志从没说过看见过它，末尾还显示「未发现进行中的签到」。
-     *   于是用户在脚本启动前（或别人代签/换设备签）已经完成的签到，
-     *   看起来就像是脚本完全没检测到。
-     *
-     * 返回：
-     *   'skip'     不是签到活动（目录/课件等）
-     *   'inactive' 未开始或已结束（state !== 1）
-     *   'unsigned' 进行中且未签到 → 需要自动提交
-     *   'signed'   进行中且已签到 → 只报告，不重复提交
-     *   'unknown'  进行中但 status 不是数字 → 接口字段可能变了，喊出来让用户反馈
-     */
-    function signActivityState(activity) {
-        if (!activity || Number(activity.relationType) !== 1) return 'skip';
-        if (Number(activity.state) !== 1) return 'inactive';
-        const st = Number(activity.status);
-        if (st === 0) return 'unsigned';
-        if (Number.isFinite(st)) return 'signed';
-        return 'unknown';
-    }
-    async function signPollOnce(course) {
-        /* 捕获当前监测对象：stopSignMonitor 会把模块变量置 null，
-           但正在 await 中的这一轮仍要用它记状态，不能在中途踩空。 */
-        const mon = gSignMonitor;
-        if (mon) mon.busy = true;
-        try {
-            const d = new Date();
-            const today = `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-            let all = [];
-            try { all = await signFetchClassrooms(course.id); }
-            catch (e) { signLog(`[${course.name}] 读取课堂列表失败：${e.message}`, 'warn'); return; }
-            const classrooms = all.filter(c => c.title && c.title.includes(today));
-            if (!classrooms.length) {
-                /* 旧实现只说「今天没有课堂」，用户分不清是「真没有」还是
-                   「课堂标题里没有今天的日期、被这一行过滤掉了」。带上接口最近的标题。 */
-                const seen = all.slice(0, 3).map(c => c.title).filter(Boolean).join('、');
-                signLog(`[${course.name}] 本轮完成：今天（${today}）没有课堂，无需签到。` + (seen ? `接口最近 3 个课堂：${seen}` : '（接口未返回任何课堂）'), 'muted');
-                return;
-            }
-            let unsignedTotal = 0, submitted = 0, signedNew = 0, unknownNew = 0;
-            for (const classroom of classrooms) {
-                let activities = [];
-                try { activities = await signFetchActivities(classroom.id); }
-                catch (e) { signLog(`[${course.name}] 读取课堂活动失败：${e.message}`, 'warn'); continue; }
-
-                const buckets = { skip: [], inactive: [], unsigned: [], signed: [], unknown: [] };
-                for (const activity of activities) buckets[signActivityState(activity)].push(activity);
-
-                /* 活动集合/状态有变化时打印一次清单：不刷屏，又能把
-                   「接口到底返回了什么」直接摆在用户眼前 —— 排查"检测不到"最需要的就是它。 */
-                const sig = activities.map(a => `${a.relationId}:${a.state}:${a.status}:${a.scoreType}`).sort().join(',');
-                if (mon && mon.lastSig[classroom.id] !== sig) {
-                    mon.lastSig[classroom.id] = sig;
-                    signLog(`[${course.name}] 课堂《${classroom.title}》共 ${activities.length} 个活动：可签到 ${buckets.unsigned.length} · 已签到 ${buckets.signed.length} · 未开始/已结束 ${buckets.inactive.length}${buckets.unknown.length ? ` · 状态异常 ${buckets.unknown.length}` : ''}`, 'muted');
-                }
-
-                /* ① 已签到（含「脚本启动前就已签」）：报告出来，每个活动只报一次，绝不重复提交 */
-                for (const activity of buckets.signed) {
-                    const key = `signed_${activity.relationId}_${classroom.id}`;
-                    if (!mon || mon.reported.has(key)) continue;
-                    mon.reported.add(key);
-                    signedNew++;
-                    const kind = signKindText(activity.scoreType);
-                    signLog(`✓ [${course.name}] ${kind}：已签到（监测开始前已完成，无需补签）`, 'success');
-                    writeSignRecord(course.name, kind, activity, { status: 'already', message: '监测开始前已签到，无需处理' });
-                }
-
-                /* ② 状态字段异常：把原文摆出来，便于发现接口变更 */
-                for (const activity of buckets.unknown) {
-                    const key = `unknown_${activity.relationId}_${classroom.id}`;
-                    if (!mon || mon.reported.has(key)) continue;
-                    mon.reported.add(key);
-                    unknownNew++;
-                    signLog(`? [${course.name}] relationId=${activity.relationId} 的 status 不是数字（state=${activity.state}, status=${activity.status}），已跳过；请把这一行反馈给作者。`, 'warn');
-                }
-
-                /* ③ 进行中且未签到：自动提交（原有逻辑不变） */
-                for (const activity of buckets.unsigned) {
-                    unsignedTotal++;
-                    const key = `${activity.relationId}_${classroom.id}`;
-                    if (!mon || mon.checked.has(key)) continue;
-                    submitted++;
-                    signLog(`[${course.name}] 发现 ${signKindText(activity.scoreType)}，正在处理…`, 'info');
-                    let result;
-                    try { result = await signSubmit(course, classroom.id, activity); }
-                    catch (e) { result = { ok: false, kind: signKindText(activity.scoreType), message: e.message }; }
-                    if (result.skip) { signLog(`[${course.name}] ${result.kind}：${result.message}`, 'warn'); mon.checked.add(key); writeSignRecord(course.name, result.kind, activity, { status: 'skipped', message: result.message }); continue; }
-                    if (result.ok) { mon.checked.add(key); signLog(`✓ [${course.name}] ${result.kind}：${result.already ? '已签到过' : '签到成功'}`, 'success'); }
-                    else signLog(`× [${course.name}] ${result.kind}：${result.message}${result.raw ? '（服务端原文：' + result.raw + '）' : ''}`, 'warn');
-                    writeSignRecord(course.name, result.kind, activity, result);
-                }
-            }
-            if (unsignedTotal === 0) {
-                if (signedNew) signLog(`[${course.name}] 本轮完成：今日 ${signedNew} 个签到在监测开始前已完成，无需补签。`, 'muted');
-                else if (unknownNew) signLog(`[${course.name}] 本轮完成：有 ${unknownNew} 个活动状态字段异常，已跳过（见上方告警）。`, 'warn');
-                else signLog(`[${course.name}] 本轮完成：未发现进行中的签到。`, 'muted');
-            } else if (submitted === 0) {
-                signLog(`[${course.name}] 本轮完成：签到活动已处理，继续等待。`, 'muted');
-            }
+            gSchedError = '读取日程失败：' + ((e && e.message) || e);
         } finally {
-            if (mon) mon.busy = false;
+            gSchedLoading = false;
+            renderScheduleList();
         }
     }
-    function startSignMonitor() {
-        const cfg = getSignConfig();
-        const course = gSignCourses.find(c => String(c.id) === String(cfg.selectedCourseId));
-        if (!course) { showStatus(errFull(ERR.SIGN_NO_COURSE), true); return; }
-        if (gSignUserIdConfidence === 'low') {
-            showToastCard('⚠ userid 置信度低', '当前 userid 来自成员列表兜底，可能与登录用户不符。请在签到设置中手动填写 userid 后再启动。', '', 12000);
-            showStatus(errFull(ERR.SIGN_USERID_LOWCONF), true);
-            return;
-        }
-        stopSignMonitor(true);
-        gSignMonitor = { timer: null, checked: new Set(), reported: new Set(), lastSig: {}, running: true, course, busy: false };
-        const interval = Math.max(2, Number(cfg.pollInterval) || 5);
-        signLog(`开始监测《${course.name}》，每 ${interval} 秒检查一次。`, 'success');
-        signLog(`当前 userid: ${gSignUserId}（来源：${gSignUserIdSource}，置信度：${gSignUserIdConfidence}）`, 'muted');
-        signLog('提示：数字码/一键签到可直接完成；二维码签到仅当活动数据自带签到码时才处理。', 'muted');
-        const run = async () => {
-            if (!gSignMonitor || !gSignMonitor.running || gSignMonitor.busy) return;
-            await signPollOnce(gSignMonitor.course);
-        };
-        run();
-        gSignMonitor.timer = setInterval(run, interval * 1000);
-        renderSignViewStatus();
-        showToastCard(`签到监测已启动`, `《${course.name}》· 每 ${interval} 秒检查一次`, '数字码/一键签到自动完成；二维码需活动自带码', 8000);
-    }
-    function stopSignMonitor(silent = false) {
-        if (!gSignMonitor) return;
-        gSignMonitor.running = false;
-        if (gSignMonitor.timer) clearInterval(gSignMonitor.timer);
-        gSignMonitor = null;
-        if (!silent) { signLog('已停止签到监测。', 'warn'); renderSignViewStatus(); showStatus('已停止签到监测'); }
-    }
-    function exportSignLog() {
-        const rec = GM_getValue(SIGN_LOG_KEY, []);
-        if (!rec.length) { showStatus('暂无签到记录可导出', true); return; }
-        let md = '# 签到记录\n\n';
-        rec.slice().reverse().forEach(r => {
-            const d = new Date(r.time);
-            md += `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())} | ${r.course} | ${r.kind} |\n`;
-            md += `  - attendanceID: ${r.attendanceID}\n  - status: ${r.status}\n  - response: ${r.message}\n\n`;
-        });
-        const uri = 'data:text/markdown;charset=utf-8,' + encodeURIComponent('\uFEFF' + md);
-        const a = document.createElement('a');
-        a.href = uri; a.download = `签到记录_${dateKey()}.md`;
-        a.style.display = 'none'; document.body.appendChild(a); a.click();
-        setTimeout(() => document.body.removeChild(a), 100);
-        showStatus('签到记录已导出');
-    }
-    function renderSignViewStatus() {
-        const el = document.getElementById('dgut-sign-status');
-        if (!el) return;
-        if (gSignMonitor && gSignMonitor.running) {
-            el.innerHTML = `<span style="color:var(--dgut-success);font-weight:600;">● 监测中</span> · 《${escapeHtml(gSignMonitor.course.name)}》 · 已处理 ${gSignMonitor.checked.size} 项`;
-        } else {
-            el.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">○ 未运行</span>`;
-        }
-    }
-    function renderSignViewRefreshCourses() { const box = document.getElementById('dgut-sign-courses'); if (box) renderSignCourseList(box); }
-    function renderSignCourseList(box) {
+    function renderScheduleList() {
+        const box = document.getElementById('dgut-sched-list');
+        const now = Date.now();
+        gSchedItems = schedPrune(gSchedItems || [], now);       // 过期自动清理（内存）
+        const done = schedDoneMap();
+        if (gSchedLoading) schedRenderStatus('正在读取近七天日程…');
+        else if (gSchedError) schedRenderStatus(gSchedError, true);
+        else schedRenderStatus(`共 ${gSchedItems.length} 项 · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')} · 过期自动清理，无提醒`);
         if (!box) return;
-        const cfg = getSignConfig();
-        const kw = (document.getElementById('dgut-sign-search')?.value || '').trim().toLowerCase();
-        const list = gSignCourses.filter(c => !kw || c.name.toLowerCase().includes(kw) || String(c.id).includes(kw) || (c.teacherName || '').toLowerCase().includes(kw));
-        if (!list.length) {
-            box.innerHTML = `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">${gSignCourses.length ? '无匹配课程' : '尚未读取课程，点击上方"读取课程"'}</div>`;
+        if (!gSchedItems.length) {
+            box.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:18px 8px;font-size:13px;">${gSchedError ? '读取失败，可点上方「刷新」重试。' : '近七天暂无日程（或已全部过期）。'}</div>`;
             return;
         }
-        box.innerHTML = list.slice(0, 60).map(c => {
-            const active = String(c.id) === String(cfg.selectedCourseId);
-            return `<button class="dgut-sign-course${active ? ' active' : ''}" data-id="${c.id}" data-name="${escapeHtml(c.name)}">
-                <b>${escapeHtml(c.name)}</b><span class="course-meta">${escapeHtml(c.teacherName || '')} · #${c.id}</span></button>`;
-        }).join('');
-        box.querySelectorAll('.dgut-sign-course').forEach(btn => btn.onclick = () => {
-            saveSignConfig({ selectedCourseId: Number(btn.dataset.id), selectedCourseName: btn.dataset.name });
-            renderSignCourseList(box);
-        });
-    }
-    function renderSignView(ac) {
-        const cfg = getSignConfig();
-        const manualUid = GM_getValue(MANUAL_USERID_KEY, 0) || '';
-        ac.innerHTML = actionHeader(ACTION_TITLES.sign, '轮询当日课堂活动并自动签到') + `
-            <div class="dgut-card">
-                <div class="dgut-row dgut-row--mb">
-                    <input id="dgut-sign-search" class="dgut-input" placeholder="搜索课程（名称/教师/ID）" style="flex:1;min-width:0;">
-                    <button id="dgut-sign-load" class="dgut-btn dgut-btn-primary" style="flex:none;">${icons.refresh} 读取课程</button>
-                </div>
-                <div id="dgut-sign-courses" class="dgut-list-box"></div>
-            </div>
-            <div class="dgut-card">
-                <div class="dgut-section-title">身份校验 <span style="font-weight:400;color:var(--dgut-on-surface-variant);font-size:11px;">（签到核心，请确认无误）</span></div>
-                <div id="dgut-sign-uid-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:8px;line-height:1.7;"></div>
-                <div class="dgut-row dgut-row--mb">
-                    <label class="dgut-label">手动 userid
-                        <input type="number" id="dgut-sign-uid" class="dgut-input" placeholder="留空=自动解析" min="0" value="${manualUid}" style="width:130px;padding:4px 6px;">
-                    </label>
-                    <button id="dgut-sign-uid-save" class="dgut-btn">保存</button>
-                    <button id="dgut-sign-uid-clear" class="dgut-btn">清除覆盖</button>
-                </div>
-            </div>
-            <div class="dgut-card">
-                <div class="dgut-section-title">监测设置</div>
-                <div class="dgut-row dgut-row--mb">
-                    <label class="dgut-label">轮询间隔(秒) <input type="number" id="dgut-sign-interval" class="dgut-input" value="${cfg.pollInterval}" min="2" max="3600" style="width:64px;padding:4px 6px;"></label>
-                    <label class="dgut-label">纬度 <input type="number" id="dgut-sign-lat" class="dgut-input" value="${cfg.lat}" step="0.0001" style="width:110px;padding:4px 6px;"></label>
-                    <label class="dgut-label">经度 <input type="number" id="dgut-sign-lng" class="dgut-input" value="${cfg.lng}" step="0.0001" style="width:110px;padding:4px 6px;"></label>
-                    <label class="dgut-label">地址 <input type="text" id="dgut-sign-addr" class="dgut-input" value="${escapeHtml(cfg.address)}" style="width:150px;padding:4px 6px;"></label>
-                </div>
-                <label class="dgut-label" style="display:block;cursor:pointer;margin-bottom:10px;">
-                    <input type="checkbox" id="dgut-sign-savelog" ${cfg.saveLog ? 'checked' : ''}> 保存签到记录（可导出 Markdown）
+        box.innerHTML = gSchedItems.map(it => {
+            const isDone = !!done[String(it.id)];
+            let when;
+            if (it.begin && it.begin > now + 60000) when = '开始 ' + schedFmtTime(it.begin);
+            else if (it.end) when = '截止 ' + schedFmtTime(it.end);
+            else when = schedFmtTime(it.t);
+            return `<div class="dgut-sched-item${isDone ? ' is-done' : ''}" data-id="${escapeHtml(it.id)}">
+                <label>
+                    <input type="checkbox" data-sid="${escapeHtml(it.id)}" ${isDone ? 'checked' : ''}>
+                    <span class="dgut-sched-main">
+                        <span class="dgut-sched-line"><span class="dgut-sched-time">${escapeHtml(when)}</span><span class="dgut-sched-title">${escapeHtml(it.title)}</span></span>
+                        ${it.courseName ? `<span class="dgut-sched-sub">${escapeHtml(it.courseName)}</span>` : ''}
+                    </span>
                 </label>
-                <div id="dgut-sign-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
-                <div class="dgut-row dgut-row--end">
-                    <button id="dgut-sign-save" class="dgut-btn">${icons.settings} 保存设置</button>
-                    <button id="dgut-sign-start" class="dgut-btn dgut-btn-primary">${icons.sign} 开始监测</button>
-                    <button id="dgut-sign-stop" class="dgut-btn">停止</button>
-                    <button id="dgut-sign-export" class="dgut-btn">${icons.export} 导出记录</button>
-                </div>
+            </div>`;
+        }).join('');
+        box.querySelectorAll('input[data-sid]').forEach(cb => {
+            cb.onchange = () => {
+                const id = cb.dataset.sid;
+                schedSetDone(id, cb.checked);
+                const row = cb.closest('.dgut-sched-item');
+                if (row) row.classList.toggle('is-done', cb.checked);
+            };
+        });
+        schedPruneDone(gSchedItems);
+    }
+    function schedStopTicker() { if (gSchedTimer) { clearInterval(gSchedTimer); gSchedTimer = null; } }
+    function schedStartTicker() {
+        schedStopTicker();
+        gSchedTimer = setInterval(() => {
+            /* 离开日程页/关闭面板后自动停止，不做后台轮询 */
+            if (typeof gActionName !== 'undefined' && gActionName !== 'schedule') { schedStopTicker(); return; }
+            if (!document.getElementById('dgut-sched-list')) { schedStopTicker(); return; }
+            const before = (gSchedItems || []).length;
+            gSchedItems = schedPrune(gSchedItems || [], Date.now());
+            if (gSchedItems.length !== before) renderScheduleList();   // 有项过期：立即从列表移除
+            schedPruneDone(gSchedItems);
+        }, 60000);
+    }
+    function renderScheduleView(ac) {
+        ac.innerHTML = actionHeader(ACTION_TITLES.schedule, '自动读取近七天日程 · 勾选后置灰 · 过期自动清理 · 无提醒') + `
+            <div class="dgut-hint">
+                因部分原因，本脚本已移除课程签到功能，请各位同学诚信签到打卡。<br>
+                日程来自优学院「活动日历」只读接口（近七天），不分类、不提醒；勾选状态只保存在本地。
             </div>
             <div class="dgut-card dgut-card--tight">
-                <div class="dgut-section-title">运行日志</div>
-                <div id="dgut-sign-log" class="dgut-log"></div>
-            </div>
-            <div class="dgut-hint">
-                <b>关于 userid 置信度</b>：脚本优先从 JWT / 手动覆盖获取（高），其次 cookie / localStorage / 全局变量（中），最后从课程成员列表兜底（低）。<br>
-                <b>低置信度时禁止自动签到</b>，请手动填入 userid 后再启动。<br>
-                <b>关于二维码签到</b>：本脚本不会识别教室现场展示的二维码图片。数字码签到、一键签到可直接完成；二维码签到仅当活动数据本身已包含签到码时才会自动处理。
+                <div class="dgut-row dgut-row--end" style="margin-bottom:8px;">
+                    <button id="dgut-sched-refresh" class="dgut-btn">${icons.refresh} 刷新</button>
+                </div>
+                <div id="dgut-sched-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;"></div>
+                <div id="dgut-sched-list" class="dgut-sched-list"></div>
             </div>`;
-        const box = ac.querySelector('#dgut-sign-courses');
-        const infoEl = ac.querySelector('#dgut-sign-uid-info');
-        const refreshUidInfo = () => {
-            const uid = gSignUserId;
-            if (!uid) {
-                infoEl.innerHTML = `<span style="color:var(--dgut-on-surface-variant);">尚未解析 userid。</span> ${signUserIdBadge()}`;
-                return;
-            }
-            infoEl.innerHTML = `当前 userid：<b>${uid}</b> · 来源：<b>${escapeHtml(gSignUserIdSource || '未知')}</b> · ${signUserIdBadge()}`;
-            if (gSignUserIdConfidence === 'low') {
-                infoEl.innerHTML += `<br><span style="color:var(--dgut-error);">? 低置信度：可能取到老师/其他学生，请手动覆盖。</span>`;
-            }
-        };
-        refreshUidInfo();
-        renderSignCourseList(box);
-        ac.querySelector('#dgut-sign-search').addEventListener('input', () => renderSignCourseList(box));
-        ac.querySelector('#dgut-sign-load').onclick = async () => { await signLoadCourses(true); renderSignCourseList(box); refreshUidInfo(); };
-        ac.querySelector('#dgut-sign-uid-save').onclick = () => {
-            const v = Number(ac.querySelector('#dgut-sign-uid').value);
-            if (Number.isFinite(v) && v > 0) {
-                GM_setValue(MANUAL_USERID_KEY, v);
-                gSignUserId = null; gSignUserIdSource = null; gSignUserIdConfidence = null;
-                signResolveUserId().then(() => { refreshUidInfo(); showStatus('已保存手动 userid：' + v); });
-            } else showStatus('请输入有效的 userid', true);
-        };
-        ac.querySelector('#dgut-sign-uid-clear').onclick = () => {
-            GM_setValue(MANUAL_USERID_KEY, 0);
-            gSignUserId = null; gSignUserIdSource = null; gSignUserIdConfidence = null;
-            ac.querySelector('#dgut-sign-uid').value = '';
-            signResolveUserId().then(() => { refreshUidInfo(); showStatus('已清除手动 userid'); });
-        };
-        const readSettings = () => ({
-            pollInterval: Math.max(2, Number(ac.querySelector('#dgut-sign-interval').value) || 5),
-            lat: Number(ac.querySelector('#dgut-sign-lat').value) || DEFAULT_SIGN_CONFIG.lat,
-            lng: Number(ac.querySelector('#dgut-sign-lng').value) || DEFAULT_SIGN_CONFIG.lng,
-            address: ac.querySelector('#dgut-sign-addr').value.trim() || DEFAULT_SIGN_CONFIG.address,
-            saveLog: ac.querySelector('#dgut-sign-savelog').checked
-        });
-        ac.querySelector('#dgut-sign-save').onclick = () => { saveSignConfig(readSettings()); showStatus('签到设置已保存'); };
-        ac.querySelector('#dgut-sign-start').onclick = async () => {
-            saveSignConfig(readSettings());
-            if (gSignUserIdConfidence === 'low' || !gSignUserId) await signResolveUserId();
-            refreshUidInfo();
-            if (!gSignCourses.length) signLoadCourses(true).then(() => startSignMonitor());
-            else startSignMonitor();
-        };
-        ac.querySelector('#dgut-sign-stop').onclick = () => stopSignMonitor();
-        ac.querySelector('#dgut-sign-export').onclick = exportSignLog;
-        renderSignViewStatus();
-        const logEl = ac.querySelector('#dgut-sign-log');
-        if (logEl) {
-            GM_getValue(SIGN_LOG_KEY, []).slice(-30).forEach(r => {
-                const d = new Date(r.time);
-                const div = document.createElement('div');
-                div.className = 'dgut-log-line log-muted';
-                div.textContent = `[${d.toLocaleString('zh-CN')}] ${r.course} | ${r.kind} | ${r.status || ''} ${r.message || ''}`;
-                logEl.appendChild(div);
-            });
-        }
-        if (gSignCourses.length) renderSignCourseList(box);
-        else signLoadCourses(false).then(() => { renderSignCourseList(box); refreshUidInfo(); });
+        ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; schedFetch(true); };
+        renderScheduleList();
+        schedStartTicker();
+        schedFetch(false);
     }
-
     /* ============================================================
      * 刷课助手（唯一实现：pg* 内核）
      *   1) 答案接口是「真异步」：await GM_xmlhttpRequest，绝不再同步取异步结果
@@ -1717,17 +1317,17 @@
                     try { parsed = JSON.parse(res.responseText); } catch (e) {}
                     if (res.status === 401 || res.status === 403) {
                         const why = parsed ? apiMessage(parsed) : '';
-                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                        return reject(new Error(errFull(ERR.API_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
                     if (res.status >= 400) {
                         const why = parsed ? apiMessage(parsed) : '';
-                        return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                        return reject(new Error(errFull(ERR.API_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
-                    if (parsed === null) return reject(new Error(errFull(ERR.SIGN_PARSE_FAIL)));
+                    if (parsed === null) return reject(new Error(errFull(ERR.API_PARSE_FAIL)));
                     return resolve(parsed);
                 },
-                onerror: () => reject(new Error(errFull(ERR.SIGN_NET_FAIL))),
-                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
+                onerror: () => reject(new Error(errFull(ERR.API_NET_FAIL))),
+                ontimeout: () => reject(new Error(errFull(ERR.API_TIMEOUT)))
             });
         });
     }
@@ -2962,17 +2562,17 @@
                     try { parsed = JSON.parse(res.responseText); } catch (e) {}
                     if (res.status === 401 || res.status === 403) {
                         const why = parsed ? apiMessage(parsed) : '';
-                        return reject(new Error(errFull(ERR.SIGN_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                        return reject(new Error(errFull(ERR.API_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
                     if (res.status >= 400) {
                         const why = parsed ? apiMessage(parsed) : String(res.responseText || '').slice(0, 60);
-                        return reject(new Error(errFull(ERR.SIGN_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                        return reject(new Error(errFull(ERR.API_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
                     if (parsed === null) return reject(new Error(errFull(ERR.PEER_PARSE_FAIL)));
                     return resolve(parsed);
                 },
                 onerror: () => reject(new Error(errFull(ERR.PEER_NET_FAIL))),
-                ontimeout: () => reject(new Error(errFull(ERR.SIGN_TIMEOUT)))
+                ontimeout: () => reject(new Error(errFull(ERR.API_TIMEOUT)))
             });
         });
     }
@@ -4594,7 +4194,7 @@ self.onmessage = function (e) {
      * ============================================================ */
     let gActionName = null;
     const ACTION_TITLES = {
-        sign: '优学院课程签到',
+        schedule: '近七天日程',
         course: '优学院刷课助手',
         peer: '作业互评记录',
         read: '求是读书',
@@ -4613,7 +4213,10 @@ self.onmessage = function (e) {
     }
     function openActionView(name) {
         if (name) GM_setValue(VIEW_MODE_KEY, name);
-        const mode = name || GM_getValue(VIEW_MODE_KEY, 'sign');
+        const raw = name || GM_getValue(VIEW_MODE_KEY, 'schedule');
+        /* 旧版本默认视图是「课程签到」（sign）；签到功能已移除，老用户自动切到「日程」 */
+        const mode = raw === 'sign' ? 'schedule' : raw;
+        if (raw === 'sign') GM_setValue(VIEW_MODE_KEY, mode);
         gActionName = mode;
         if (!document.getElementById('dgut-main-panel')) {
             GM_setValue(PANEL_OPEN_KEY, true);
@@ -4630,8 +4233,10 @@ self.onmessage = function (e) {
     function renderActionView(name) {
         const ac = document.getElementById('dgut-action-container');
         if (!ac) return;
+        /* 离开日程页就停掉它的「过期自动清理」定时器（它只在打开日程时运行） */
+        if (name !== 'schedule' && typeof schedStopTicker === 'function') { try { schedStopTicker(); } catch (e) {} }
         switch (name) {
-            case 'sign': renderSignView(ac); break;
+            case 'schedule': renderScheduleView(ac); break;
             case 'course': renderCourseView(ac); break;
             case 'peer': renderPeerView(ac); break;
             case 'read': renderReadView(ac); break;
@@ -4937,7 +4542,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.9.2';
+    const ABOUT_VERSION = 'v5.10.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
@@ -5077,7 +4682,7 @@ self.onmessage = function (e) {
                 <div class="dgut-card">
                     <div class="dgut-section-title">功能一览</div>
                     <div style="font-size:13px;line-height:2;">
-                        · <b>课程签到</b>：轮询当日课堂，自动处理数字码 / 一键签到；userid 多源解析带置信度<br>
+                        · <b>近七天日程</b>：只读优学院「活动日历」接口，平铺显示近 7 天事项；勾选后置灰，过期自动清理，无提醒<br>
                         · <b>刷课助手</b>：视频倍速守卫、自动答题、自动翻页、题库收集<br>
                         · <b>作业互评</b>：读取互评接口，汇总与筛选记录<br>
                         · <b>求是读书</b>：课件阅读时长统计与自动翻页<br>
@@ -5085,6 +4690,9 @@ self.onmessage = function (e) {
                         · <b>Word 转 PDF</b>：本地解析 .docx 并导出 PDF / .doc<br>
                         · <b>图片工具</b>：缩放、压缩、增大文件、锐化 / 黑白 / 亮度均匀<br>
                         · <b>外观设置</b>：亮/暗/跟随系统主题 + 主体色
+                    </div>
+                    <div style="font-size:11px;margin-top:8px;color:var(--dgut-on-surface-variant);line-height:1.7;">
+                        因部分原因，本脚本已移除课程签到功能，请各位同学诚信签到打卡。
                     </div>
                 </div>`;
             renderGitHubInfo(contentEl.querySelector('#dgut-gh-info'));
@@ -5165,14 +4773,14 @@ self.onmessage = function (e) {
             contentEl.innerHTML = `
                 <div class="dgut-hint">
                     <b>编码规则</b>：四位数字 <code>M T N N</code><br>
-                    · <b>M（千位）</b> 模块：1=签到 2=刷课 3=互评 4=读书 5=文档 6=Word转PDF 7=图片 8=通用/框架<br>
+                    · <b>M（千位）</b> 模块：1=网络/认证（历史签到段） 2=刷课 3=互评 4=读书 5=文档 6=Word转PDF 7=图片 8=通用/框架<br>
                     · <b>T（百位）</b> 类型：0=未知 1=请求 2=处理 3=认证 4=依赖缺失 5=参数 6=用户操作<br>
                     · <b>NN（十/个位）</b> 具体编号
                 </div>
                 <div class="dgut-card">
                     <div class="dgut-section-title">本次自检（同步阶段）</div>
                     <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;overflow:hidden;">${scRows}</div>
-                    <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:8px;">异步阶段（Token 与 userid）会输出到控制台。可打开 F12 查看。</div>
+                    <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:8px;">异步阶段（Token 检查）会输出到控制台。可打开 F12 查看。</div>
                 </div>
                 <div class="dgut-card">
                     <div class="dgut-section-title">错误代码列表</div>
@@ -5385,7 +4993,7 @@ self.onmessage = function (e) {
             <div style="display:flex;flex:1;min-height:0;">
                 <div id="dgut-sidebar">
                     <div class="dgut-nav-label">优学院</div>
-                    <button class="dgut-nav" data-action="sign">${icons.sign} 课程签到</button>
+                    <button class="dgut-nav" data-action="schedule">${icons.calendar} 近七天日程</button>
                     <button class="dgut-nav" data-action="course">${icons.course} 刷课助手</button>
                     <button class="dgut-nav" data-action="peer">${icons.peer} 作业互评</button>
                     <button class="dgut-nav" data-action="read">${icons.read} 求是读书</button>
@@ -5428,7 +5036,10 @@ self.onmessage = function (e) {
             t.classList.add('dgut-tab-active');
             renderActionView(t.dataset.action);
         });
-        const mode = GM_getValue(VIEW_MODE_KEY, 'sign');
+        const rawMode = GM_getValue(VIEW_MODE_KEY, 'schedule');
+        /* 旧版本默认「课程签到」（sign）；签到已移除，老用户自动切到「日程」 */
+        const mode = rawMode === 'sign' ? 'schedule' : rawMode;
+        if (rawMode === 'sign') GM_setValue(VIEW_MODE_KEY, mode);
         gActionName = mode;
         panel.querySelectorAll('.dgut-nav').forEach(x => x.classList.toggle('dgut-tab-active', x.dataset.action === mode));
         renderActionView(mode);
@@ -5732,7 +5343,7 @@ self.onmessage = function (e) {
         GM_registerMenuCommand('重置面板/悬浮面板位置', resetPanelPositions);
         GM_registerMenuCommand('重置面板大小与缩放', resetPanelSize);
         refreshFabEdgeSnapMenu();
-        GM_registerMenuCommand('优学院课程签到', () => openActionView('sign'));
+        GM_registerMenuCommand('近七天日程', () => openActionView('schedule'));
         GM_registerMenuCommand('优学院刷课助手', () => openActionView('course'));
         GM_registerMenuCommand('作业互评记录', () => openActionView('peer'));
         GM_registerMenuCommand('求是读书', () => openActionView('read'));
