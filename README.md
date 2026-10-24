@@ -139,23 +139,124 @@
 3. **过期自动清理**：过了截止时间的项会自动从列表移除（每分钟检查一次），不会提醒、不会弹窗。
 4. **刷新**：点「刷新」可手动重新拉取（打开视图 5 分钟内复用缓存，避免频繁请求）。
 
-**日程数据从哪来（接口获取逻辑）**：
+**日程数据从哪来（接口获取逻辑，尽可能详细）**
+
+日程不是手动导入的，而是脚本拿着你当前的登录凭证，向优学院请求一份「活动日历」。
+整个过程就是一个普通的**只读 HTTP GET**，分 4 步：
+
+**第 1 步：算出要查的日期范围**
+
+今天是哪一天，`startDate` 就填今天；`endDate` 填今天往后 7 天。格式必须是 `YYYY-MM-DD`
+（月、日不足两位要补零）。举例，如果今天是 2026-10-24：
 
 ```
-GET https://lms.dgut.edu.cn/courseapi/activitycalendar
-    ?startDate=YYYY-MM-DD        // 今天
-    &endDate=YYYY-MM-DD          // 今天 + 7 天
-    &lang=zh
-请求头：Authorization: <当前登录 token>（原样，不加 Bearer；只读 GET，anonymous）
-返回：{ total, courseCount, homeworkCount, …, activityList: [
-        { activityId, activityType, title, ocId, courseName, beginTime, endTime } ] }
+startDate=2026-10-24
+endDate=2026-10-31
 ```
 
-- `beginTime` / `endTime` 是**毫秒时间戳**；脚本只保留「截止时间在 7 天内且未过期」的项，
-  按时间升序排列，显示「开始 / 截止 + 标题 + 课程名」。
-- 该接口是**唯一带时间范围的只读日程接口**；课堂接口（`getClassroomList` /
-  `classroomActivitys`）没有时间范围参数，因此没有用于日程。
-- 只发只读 GET，不写任何服务端状态；接口字段若调整，界面会显示「读取日程失败」并附带原文。
+**第 2 步：拼出完整 URL 并发送请求**
+
+```
+GET https://lms.dgut.edu.cn/courseapi/activitycalendar?startDate=2026-10-24&endDate=2026-10-31&lang=zh
+```
+
+它等价于下面这个「带请求头」的请求（用来说明每个部分的含义）：
+
+```
+GET /courseapi/activitycalendar?startDate=2026-10-24&endDate=2026-10-31&lang=zh
+Host: lms.dgut.edu.cn
+Accept: application/json, text/plain, */*
+Authorization: 你的登录 token（从 cookie 的 AUTHORIZATION 取原值）
+Referer: https://lms.dgut.edu.cn/
+```
+
+- `startDate / endDate`：只查这段时间内的活动，格式 `YYYY-MM-DD`；
+- `lang=zh`：让接口返回中文标题；
+- `Authorization`：**登录凭证，不是账号密码**。登录优学院后浏览器 cookie 里会有一个
+  `AUTHORIZATION=...`，脚本把这个值原样放进请求头；**不能加 `Bearer ` 前缀**，否则会 401「无效的token」；
+- 在 `ua.dgut.edu.cn` 页面里脚本读不到 lms 的 cookie，会用油猴的 `GM_cookie` 去读
+  `https://lms.dgut.edu.cn` 域下的 `AUTHORIZATION`（首次会弹一次「允许读取本站 Cookie」，点允许即可）；
+- 请求选项里的 `anonymous: true` 只是告诉油猴「不要自动带浏览器 cookie」，认证只靠上面的 `Authorization` 头。
+
+**第 3 步：接口返回 JSON**
+
+2026-10 实测返回示例（已删掉无关字段；`beginTime/endTime` 是**毫秒时间戳**）：
+
+```json
+{
+  "total": 2,
+  "homeworkCount": 2,
+  "activityList": [
+    {
+      "activityId": 499736,
+      "activityType": 2,
+      "title": "第8周作业",
+      "ocId": 161259,
+      "courseName": "【2026秋】概率论与数理统计",
+      "beginTime": 1792716600000,
+      "endTime": 1792943940000
+    },
+    {
+      "activityId": 494258,
+      "activityType": 2,
+      "title": "实验3 编码器、译码器和数码管的应用",
+      "ocId": 161322,
+      "courseName": "闫白-【2026秋】数字逻辑",
+      "beginTime": 1792370700000,
+      "endTime": 1793375940000
+    }
+  ]
+}
+```
+
+字段对照：
+
+| 字段 | 含义 | 脚本怎么用 |
+| --- | --- | --- |
+| `activityList` | 活动数组 | 遍历它生成列表 |
+| `activityId` | 活动唯一编号 | 每项的 id（勾选状态按它保存） |
+| `title` | 标题（如「第8周作业」） | 列表里显示 |
+| `courseName` | 所属课程 | 列表里以小字显示 |
+| `beginTime` | 开始时间（毫秒时间戳） | 还没开始就显示「开始 …」 |
+| `endTime` | 截止时间（毫秒时间戳） | 判断是否过期，显示「截止 …」 |
+| `activityType` | 活动类型编号 | **不使用**（需求是不分类） |
+
+时间戳换算：`1792943940000` 毫秒 = 北京时间 `2026-10-25 23:59:00`
+（浏览器控制台输入 `new Date(1792943940000)` 即可看到）。
+
+**第 4 步：本地过滤、排序、显示**
+
+接口给的是「这段时间内的活动」，脚本收到后还会再筛一遍（`t` = 有 `endTime` 就用
+`endTime`，没有就用 `beginTime`）：
+
+1. `t` 早于「现在」→ 丢掉（这就是「过了时间自动清理」）；
+2. `t` 超过「现在 + 7 天」→ 丢掉（防止接口忽略日期参数返回太远的活动）；
+3. 没有标题、或者 `beginTime/endTime` 都没有 → 丢掉；
+4. 同一个 `activityId` 重复的只留一条；
+5. 按「还没开始用开始时间，否则用截止时间」升序排列；
+6. 渲染成 `开始/截止 10-25 23:59 · 第8周作业（概率论与数理统计）`，勾选后置灰。
+
+之后每分钟重复第 4 步的第 1 条（清理过期项）；打开视图 5 分钟内复用缓存，不重复请求接口。
+
+**为什么不用课堂接口**：`getClassroomList` / `classroomActivitys` 只能看到「已经建好的课堂」，
+没有日期范围参数，也拿不到未来 7 天的安排；所以日程只用 `activitycalendar` 这个唯一带时间范围的只读接口。
+
+> 想自己验证？在 **lms.dgut.edu.cn** 页面按 F12 → Console，执行下面这段（需已登录；
+> token 是你的登录凭证，**不要截图或外发**）：
+>
+> ```js
+> const token = (document.cookie.match(/AUTHORIZATION=([^;]+)/) || [])[1];
+> const p = n => String(n).padStart(2, '0');
+> const fmt = d => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+> const end = new Date(Date.now() + 7 * 86400000);
+> fetch(`/courseapi/activitycalendar?startDate=${fmt(new Date())}&endDate=${fmt(end)}&lang=zh`, {
+>   headers: { Authorization: token }
+> }).then(r => r.json()).then(j => console.table((j.activityList || []).map(x => ({
+>   标题: x.title, 课程: x.courseName,
+>   开始: new Date(x.beginTime).toLocaleString(),
+>   截止: new Date(x.endTime).toLocaleString()
+> }))));
+> ```
 
 ### 刷课助手
 
