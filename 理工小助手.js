@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.11.0
+// @version      5.11.1
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1021,9 +1021,6 @@
             GM_setValue(SCHED_CACHE_KEY, { at: Date.now(), items: slim });
         } catch (e) {}
     }
-    function schedCacheText() {
-        return gSchedCacheAt ? `本地缓存（更新于 ${schedFmtTime(gSchedCacheAt)}）` : '本地缓存';
-    }
     /** 把接口返回的原始活动列表归一化成「近七天日程项」（纯函数，便于回归测试） */
     function schedNormalize(list, now) {
         now = Number(now) || Date.now();
@@ -1063,15 +1060,15 @@
     async function schedFetch(force) {
         if (gSchedLoading) return;
         if (!force && gSchedItems && Date.now() - gSchedFetchedAt < SCHED_REFRESH_MS) { renderScheduleList(); return; }
-        if (!isUlearningHost(location.hostname)) {
-            /* 非优学院页面：直接展示本地缓存；没有缓存才提示先登录一次 */
-            if ((gSchedItems || []).length) { gSchedFromCache = true; gSchedError = ''; }
-            else gSchedError = '暂无本地缓存：请先在优学院页面打开一次「近七天日程」，之后即可离线查看。';
+        /* 任意窗口都能刷新：缓存存在时用已授权的 Cookie 取 Token 直接联网；
+           从未缓存过时才要求先在优学院页面打开一次 */
+        if (!force && !gSchedCacheAt && !(gSchedItems || []).length) {
+            gSchedError = '暂无本地缓存：请先在优学院页面打开一次「近七天日程」，之后即可直接查看。';
             renderScheduleList();
             return;
         }
         gSchedLoading = true; gSchedError = '';
-        schedRenderStatus((gSchedItems || []).length ? '正在刷新日程…（当前显示缓存）' : '正在读取近七天日程…');
+        schedRenderStatus((gSchedItems || []).length ? '正在刷新…' : '正在读取日程…');
         try {
             const now = new Date();
             const start = schedDateStr(now);
@@ -1087,7 +1084,13 @@
             schedPruneDone(gSchedItems);
         } catch (e) {
             const msg = (e && e.message) || e;
-            gSchedError = (gSchedItems || []).length ? '刷新失败（显示本地缓存）：' + msg : '读取日程失败：' + msg;
+            if ((gSchedItems || []).length && /Token|登录|E1131|E1132/.test(msg)) {
+                /* 未登录 / 授权未通过：安静地继续显示缓存，不弹刺眼错误 */
+                gSchedError = '';
+                gSchedFromCache = true;
+            } else {
+                gSchedError = (gSchedItems || []).length ? '刷新失败（显示本地缓存）：' + msg : '读取日程失败：' + msg;
+            }
         } finally {
             gSchedLoading = false;
             renderScheduleList();
@@ -1098,10 +1101,10 @@
         const now = Date.now();
         gSchedItems = schedPrune(gSchedItems || [], now);       // 过期自动清理（内存）
         const done = schedDoneMap();
-        if (gSchedLoading) schedRenderStatus('正在读取近七天日程…');
+        if (gSchedLoading) schedRenderStatus('正在刷新…');
         else if (gSchedError) schedRenderStatus(gSchedError, true);
-        else if (gSchedFromCache) schedRenderStatus(`共 ${gSchedItems.length} 项 · ${schedCacheText()} · 打开优学院页面自动刷新 · 无提醒`);
-        else schedRenderStatus(`共 ${gSchedItems.length} 项 · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')} · 过期自动清理，无提醒`);
+        else if (gSchedFromCache) schedRenderStatus(`本地缓存 · 更新于 ${schedFmtTime(gSchedCacheAt)}`);
+        else schedRenderStatus(`共 ${gSchedItems.length} 项 · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')}`);
         if (!box) return;
         if (!gSchedItems.length) {
             box.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:18px 8px;font-size:13px;">${gSchedError ? '读取失败，可点上方「刷新」重试。' : '近七天暂无日程（或已全部过期）。'}</div>`;
@@ -1147,12 +1150,12 @@
         }, 60000);
     }
     function renderScheduleView(ac) {
-        ac.innerHTML = actionHeader(ACTION_TITLES.schedule, '打开即显示本地缓存 · 优学院页面自动刷新 · 勾选置灰 · 无提醒') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.schedule) + `
             <div class="dgut-card dgut-card--tight">
-                <div class="dgut-row dgut-row--end" style="margin-bottom:8px;">
-                    <button id="dgut-sched-refresh" class="dgut-btn">${icons.refresh} 刷新</button>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+                    <div id="dgut-sched-status" style="font-size:12px;color:var(--dgut-on-surface-variant);min-width:0;"></div>
+                    <button id="dgut-sched-refresh" class="dgut-btn" style="flex:none;">${icons.refresh} 刷新</button>
                 </div>
-                <div id="dgut-sched-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;"></div>
                 <div id="dgut-sched-list" class="dgut-sched-list"></div>
             </div>`;
         ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; gSchedFromCache = false; schedFetch(true); };
@@ -4581,7 +4584,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.11.0';
+    const ABOUT_VERSION = 'v5.11.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
