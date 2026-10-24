@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.10.1
+// @version      5.11.0
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -44,7 +44,7 @@
  *   · 「立即更新」按钮：**发现新版本时才出现**，点了打开油猴安装页，
  *     由用户在油猴弹窗里按下确认后覆盖安装 —— 替换动作始终由用户决定。
  *
- * ⚠ 安装链接必须指向 `.user.js`：油猴只把「.user.js 结尾」的链接识别成可安装脚本
+ * 注意：安装链接必须指向 `.user.js`：油猴只把「.user.js 结尾」的链接识别成可安装脚本
  *   （官方 FAQ Q102），指向 `理工小助手.js` 只会显示源码、不弹安装页。
  *   所以仓库根目录除了 `理工小助手.js` 还发布一份内容**完全相同**的
  *   `理工小助手.user.js`，由 tools/prepare-publish.mjs 生成，并强制校验两者 sha256 一致。
@@ -69,6 +69,8 @@
     const MANUAL_TOKEN_KEY = 'dgut_manual_token';
     /* 近七天日程：勾选状态单独存，接口刷新/过期清理都不影响用户已勾选的其他项 */
     const SCHED_DONE_KEY = 'dgut_schedule_done';
+    /* 近七天日程的本地缓存：成功拉取后写入，未登录/其他网站打开时可先展示 */
+    const SCHED_CACHE_KEY = 'dgut_schedule_cache';
     const COURSE_HELPER_KEY = 'dgut_course_helper_config';
     const BANK_KEY = 'dgut_quiz_bank';
     const PEER_KEY = 'dgut_peer_review_records';
@@ -290,7 +292,7 @@
     /**
      * 主机名是否属于优学院环境（DGUT 或 ulearning 域）。
      *
-     * ⚠ 这个判断的存在意义就是**别在不相关的网站上碰用户数据**：
+     * 注意：这个判断的存在意义就是**别在不相关的网站上碰用户数据**：
      * 本脚本的 @match 是全站通配（任何网站都会运行），而油猴的 Cookie 授权是
      * 「按域弹窗、点一次记住」—— 只要脚本在某个域上调一次 GM_cookie，
      * 用户就会看到一个「允许读取本站 Cookie」的确认框。
@@ -445,19 +447,19 @@
         console.log(TAG, '========== 自检开始 ==========');
         console.log(TAG, `通过 ${passed}/${results.length}，失败 ${results.length - passed} 项`);
         results.forEach(r => {
-            if (r.ok) console.log(TAG, `[自检] ✓ ${r.name}`);
-            else console.warn(TAG, `[自检] ✗ ${errTag(r.errDef)} ${r.name} 未就绪`);
+            if (r.ok) console.log(TAG, `[自检] OK ${r.name}`);
+            else console.warn(TAG, `[自检] FAIL ${errTag(r.errDef)} ${r.name} 未就绪`);
         });
 
         const host = location.hostname;
         const isLms = isUlearningHost(host);
-        console.log(TAG, `[自检] 当前域 ${host} ${isLms ? '✓ 属于优学院环境' : '⚠ 不在优学院环境中（部分功能不可用）'}`);
+        console.log(TAG, `[自检] 当前域 ${host} ${isLms ? 'OK 属于优学院环境' : 'WARN 不在优学院环境中（部分功能不可用）'}`);
 
         const ifr = detectIframe();
-        console.log(TAG, `[自检] ${ifr.isTop ? '✓ 顶层窗口' : '⚠ iframe 环境（刷课/读书建议在顶层打开）'}`);
-        if (ifr.hasVideo) console.log(TAG, `[自检] ✓ 本帧存在 video 元素`);
-        if (ifr.hasVM) console.log(TAG, `[自检] ✓ 本帧存在 koLearnCourseViewModel`);
-        if (ifr.hasKo) console.log(TAG, `[自检] ✓ 本帧存在 ko`);
+        console.log(TAG, `[自检] ${ifr.isTop ? 'OK 顶层窗口' : 'WARN iframe 环境（刷课/读书建议在顶层打开）'}`);
+        if (ifr.hasVideo) console.log(TAG, `[自检] OK 本帧存在 video 元素`);
+        if (ifr.hasVM) console.log(TAG, `[自检] OK 本帧存在 koLearnCourseViewModel`);
+        if (ifr.hasKo) console.log(TAG, `[自检] OK 本帧存在 ko`);
         console.log(TAG, '========== 自检结束 ==========');
 
         window.__dgutSelfCheckResults = results;        return results;
@@ -466,7 +468,7 @@
 
     setTimeout(async function asyncSelfCheck() {
         console.log(TAG, '========== 异步自检开始 ==========');
-        /* ★ 非优学院页面**什么都不查**。
+        /* 非优学院页面**什么都不查**。
            以前这里无条件跑 checkAuthToken() + 用户身份解析，而它们都会调
            GM_cookie —— 油猴按域弹一次授权框，于是用户每访问一个新网站（例如
            chat.deepseek.com）都会看到一个「允许脚本读取本站 Cookie」的确认框。
@@ -480,11 +482,11 @@
         try {
             const auth = await checkAuthToken();
             if (!auth.present) {
-                console.warn(TAG, `[自检] ⚠ ${errTag(ERR.API_NO_TOKEN)} 未获取到 Token（可能未登录，日程/互评接口会失败）`);
+                console.warn(TAG, `[自检] WARN ${errTag(ERR.API_NO_TOKEN)} 未获取到 Token（可能未登录，日程/互评接口会失败）`);
             } else {
                 const expStr = (auth.payload && auth.payload.exp) ? new Date(auth.payload.exp * 1000).toLocaleString() : '无 exp';
-                if (auth.expired) console.warn(TAG, `[自检] ⚠ ${errTag(ERR.API_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
-                else console.log(TAG, `[自检] ✓ Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
+                if (auth.expired) console.warn(TAG, `[自检] WARN ${errTag(ERR.API_TOKEN_EXPIRED)} Token 已过期（过期于 ${expStr}）`);
+                else console.log(TAG, `[自检] OK Token 存在（来源：${auth.source}，长度 ${auth.token.length}，过期于 ${expStr}）`);
             }
         } catch (e) {}
 
@@ -960,7 +962,9 @@
      * ============================================================ */
     const SCHED_WINDOW_DAYS = 7;
     const SCHED_REFRESH_MS = 5 * 60 * 1000;
+    const SCHED_CACHE_MAX = 200;
     let gSchedItems = null, gSchedFetchedAt = 0, gSchedLoading = false, gSchedError = '', gSchedTimer = null;
+    let gSchedFromCache = false, gSchedCacheAt = 0;
 
     GM_addStyle(`
         .dgut-sched-list { display: flex; flex-direction: column; gap: 6px; max-height: 430px; overflow-y: auto; }
@@ -997,6 +1001,28 @@
         let changed = false;
         for (const k in m) { if (!alive.has(k)) { delete m[k]; changed = true; } }
         if (changed) { try { GM_setValue(SCHED_DONE_KEY, m); } catch (e) {} }
+    }
+    /* 本地缓存：把上次成功拉取的日程存进脚本存储，换页面 / 重开浏览器都能先看到，
+       不用每次都先登录优学院。缓存只存展示所需字段，最多保留 200 条。 */
+    function schedCacheRead() {
+        try {
+            const c = GM_getValue(SCHED_CACHE_KEY, null);
+            if (!c || !Array.isArray(c.items)) return null;
+            return { at: Number(c.at) || 0, items: c.items };
+        } catch (e) { return null; }
+    }
+    function schedCacheWrite(items) {
+        try {
+            const slim = (items || []).slice(0, SCHED_CACHE_MAX).map(it => ({
+                id: String(it.id), title: it.title, courseName: it.courseName || '',
+                begin: Number(it.begin) || 0, end: Number(it.end) || 0,
+                t: Number(it.t) || 0, sortT: Number(it.sortT) || 0,
+            }));
+            GM_setValue(SCHED_CACHE_KEY, { at: Date.now(), items: slim });
+        } catch (e) {}
+    }
+    function schedCacheText() {
+        return gSchedCacheAt ? `本地缓存（更新于 ${schedFmtTime(gSchedCacheAt)}）` : '本地缓存';
     }
     /** 把接口返回的原始活动列表归一化成「近七天日程项」（纯函数，便于回归测试） */
     function schedNormalize(list, now) {
@@ -1038,12 +1064,14 @@
         if (gSchedLoading) return;
         if (!force && gSchedItems && Date.now() - gSchedFetchedAt < SCHED_REFRESH_MS) { renderScheduleList(); return; }
         if (!isUlearningHost(location.hostname)) {
-            gSchedError = '请先在优学院页面（lms.dgut.edu.cn / ua.dgut.edu.cn）打开面板，再查看日程。';
+            /* 非优学院页面：直接展示本地缓存；没有缓存才提示先登录一次 */
+            if ((gSchedItems || []).length) { gSchedFromCache = true; gSchedError = ''; }
+            else gSchedError = '暂无本地缓存：请先在优学院页面打开一次「近七天日程」，之后即可离线查看。';
             renderScheduleList();
             return;
         }
         gSchedLoading = true; gSchedError = '';
-        schedRenderStatus('正在读取近七天日程…');
+        schedRenderStatus((gSchedItems || []).length ? '正在刷新日程…（当前显示缓存）' : '正在读取近七天日程…');
         try {
             const now = new Date();
             const start = schedDateStr(now);
@@ -1053,9 +1081,13 @@
             if (!Array.isArray(raw)) throw new Error('接口返回结构异常：' + apiRaw(res));
             gSchedItems = schedNormalize(raw, Date.now());
             gSchedFetchedAt = Date.now();
+            gSchedFromCache = false;
+            gSchedCacheAt = gSchedFetchedAt;
+            schedCacheWrite(gSchedItems);
             schedPruneDone(gSchedItems);
         } catch (e) {
-            gSchedError = '读取日程失败：' + ((e && e.message) || e);
+            const msg = (e && e.message) || e;
+            gSchedError = (gSchedItems || []).length ? '刷新失败（显示本地缓存）：' + msg : '读取日程失败：' + msg;
         } finally {
             gSchedLoading = false;
             renderScheduleList();
@@ -1068,6 +1100,7 @@
         const done = schedDoneMap();
         if (gSchedLoading) schedRenderStatus('正在读取近七天日程…');
         else if (gSchedError) schedRenderStatus(gSchedError, true);
+        else if (gSchedFromCache) schedRenderStatus(`共 ${gSchedItems.length} 项 · ${schedCacheText()} · 打开优学院页面自动刷新 · 无提醒`);
         else schedRenderStatus(`共 ${gSchedItems.length} 项 · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')} · 过期自动清理，无提醒`);
         if (!box) return;
         if (!gSchedItems.length) {
@@ -1114,7 +1147,7 @@
         }, 60000);
     }
     function renderScheduleView(ac) {
-        ac.innerHTML = actionHeader(ACTION_TITLES.schedule, '自动读取近七天日程 · 勾选后置灰 · 过期自动清理 · 无提醒') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.schedule, '打开即显示本地缓存 · 优学院页面自动刷新 · 勾选置灰 · 无提醒') + `
             <div class="dgut-card dgut-card--tight">
                 <div class="dgut-row dgut-row--end" style="margin-bottom:8px;">
                     <button id="dgut-sched-refresh" class="dgut-btn">${icons.refresh} 刷新</button>
@@ -1122,7 +1155,17 @@
                 <div id="dgut-sched-status" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;"></div>
                 <div id="dgut-sched-list" class="dgut-sched-list"></div>
             </div>`;
-        ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; schedFetch(true); };
+        ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; gSchedFromCache = false; schedFetch(true); };
+        /* 首次打开先读本地缓存，立即可见；随后在优学院页面上再尝试刷新 */
+        if (!gSchedItems) {
+            const c = schedCacheRead();
+            if (c) {
+                gSchedItems = schedPrune(c.items, Date.now());
+                gSchedCacheAt = c.at;
+                gSchedFetchedAt = c.at;
+                gSchedFromCache = true;
+            }
+        }
         renderScheduleList();
         schedStartTicker();
         schedFetch(false);
@@ -1171,7 +1214,7 @@
     function pgVisible(el) { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
     function pgReText(text) { return String(text || '').replace(/<\/?.+?\/?>/g, '').replace(/[\t\n\r]/g, '').replace(/&.*?;/g, '').trim(); }
     /* 模拟一次点击。
-       ★ 关键修复（跳过中间视频的真正原因）：
+       关键修复（跳过中间视频的真正原因）：
          旧实现先 dispatchEvent('click')、再 el.click()，等于把 click 处理函数调用两次
          （已用假元素实测：只派发=1 次、只 .click()=1 次、两者都做=2 次）。
          「下一页」按钮 .next-page-btn 是静态常驻元素，绑定 click: goNextPage，
@@ -1227,7 +1270,7 @@
     }
     function dbg(section, msg) { if (dbgOn()) chLog('〔' + section + '〕' + msg, 'muted'); }
     function dbgHot(section, msg) { if (dbgOn()) chLog('〔' + section + '〕▼ ' + msg, 'hot'); }
-    function dbgErr(section, msg) { if (dbgOn()) chLog('〔' + section + '〕✗ ' + msg, 'error'); }
+    function dbgErr(section, msg) { if (dbgOn()) chLog('〔' + section + '〕FAIL ' + msg, 'error'); }
     /** 给可能抛错的代码加调试：返回值与异常都记账；关闭调试时行为与原来完全一致 */
     function dbgTry(section, label, fn) {
         if (!dbgOn()) { try { return fn(); } catch (e) { return undefined; } }
@@ -1347,7 +1390,7 @@
     /* ============================================================
      * 倍速守卫（realm-safe 版 · 2026-10 修复「倍速设置不生效」）
      * ------------------------------------------------------------
-     * ★ 旧实现（错误）：
+     * 旧实现（错误）：
      *     1) 用 Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'playbackRate')
      *        取原生 descriptor；
      *     2) 再用 Object.defineProperty(v,'playbackRate',{get/set}) 在视频元素上装自己的
@@ -1359,7 +1402,7 @@
      *   表现正是用户现场看到的「面板 15×、debug 日志 video 一直在播放，
      *   但 currentTime 33s→83s 用了 52 秒墙钟（≈1×）」。
      *
-     * ★ 现在：彻底去掉 descriptor / defineProperty，改成**纯属性读写**
+     * 现在：彻底去掉 descriptor / defineProperty，改成**纯属性读写**
      *   （与参考实现 v1.6.9 的 `ele.playbackRate = N` 一致，任何 realm 下都成立）。
      *   读取失败时按 0 处理，保证 Math.abs(0 - target) > 0.01 一定成立 → 一定会 set，
      *   绝不会再出现「静默跳过」。
@@ -1923,7 +1966,7 @@
             btn = all.find(b => !b.disabled && !b.classList.contains('disabled')) || null;
         }
         if (btn) {
-            dbgHot('翻页', '✔ 点击「下一页」按钮 → ' + pgElDesc(btn));
+            dbgHot('翻页', 'OK 点击「下一页」按钮 → ' + pgElDesc(btn));
             pgTriggerMouseSequence(btn);
             gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
             gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期，期间不评估新页
@@ -1934,7 +1977,7 @@
         dbg('翻页', '页内无「下一页」按钮 → 查目录里的下一节：' + (nextPage ? '找到「' + pgReText(nextPage.textContent) + '」' : '没找到'));
         if (nextPage) {
             chLog('本专题已无「下一页」，从目录跳转到：' + (pgReText(nextPage.textContent) || '下一节'), 'info');
-            dbgHot('翻页', '✔ 点击目录项跳转 → ' + pgElDesc(nextPage));
+            dbgHot('翻页', 'OK 点击目录项跳转 → ' + pgElDesc(nextPage));
             pgTriggerMouseSequence(nextPage);
             gPgLastAdvanceAt = now; gPgAdvancePageId = pid;
             gPgSettleUntil = now + PG_AFTER_ADVANCE_SETTLE_MS;   // 翻页后静默期
@@ -2268,7 +2311,7 @@
                 if (useSite) {
                     chLog(`本页完成标记：站点标记可用（命中 ${statuses.length} 个 / video ${videos.length} 个），按站点标记判定是否翻页。`, 'muted');
                 } else {
-                    chLog(`本页完成标记：⚠ 未命中站点标记（.video-bottom span:first-child 命中 ${statuses.length} 个，video ${videos.length} 个），只能回退播放器状态判定。`, 'warn');
+                    chLog(`本页完成标记：WARN 未命中站点标记（.video-bottom span:first-child 命中 ${statuses.length} 个，video ${videos.length} 个），只能回退播放器状态判定。`, 'warn');
                 }
             }
             if (dbgOn()) {
@@ -2373,7 +2416,7 @@
         if (!isCoursePage()) { showStatus(errFull(ERR.COURSE_NO_PAGE), true); return; }
         const ifr = detectIframe();
         if (!ifr.hasVideo && !ifr.hasVM && document.querySelectorAll('.question-element-node').length === 0) {
-            showToastCard('⚠ 未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
+            showToastCard('未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
         }
         gPgEpoch++;
         gPgSkippedPages.clear();
@@ -2412,8 +2455,8 @@
         const ifr = detectIframe();
         ac.innerHTML = actionHeader(ACTION_TITLES.course, '课件视频倍速、自动答题、自动翻页与题库') + `
             <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '✓ 当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
-                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">⚠ 当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
+                ${onPage ? '当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
+                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
             </div>
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
@@ -2423,7 +2466,7 @@
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
-                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 🔍 详细调试日志</label>
+                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 详细调试日志</label>
                 </div>
                 <div class="dgut-hint" style="margin-bottom:10px;">遇到跳页时：打开上面的<b>详细调试日志</b> → 复现一次 → 点<b>复制日志</b>把内容发给开发者。日志里会写明每次翻页是<b>谁发起的、当时的站点标记是什么</b>。</div>
                 <div class="dgut-hint" style="margin-bottom:10px;">取不到答案时<b>不会提交</b>，会重试 <b>${PG_MAX_NO_ANSWER_ROUNDS}</b> 轮；视频停滞超过 <b>${Math.round(PG_STALL_MS / 1000)}s</b> 会自动尝试恢复。</div>
@@ -2815,7 +2858,7 @@
             if (pid && pid !== gRead.curPageId) { gRead.curPageId = pid; gRead.pageStart = Date.now(); }
             if (gRead.total >= READ_MIN_SEC) {
                 const dwellOk = gRead.curPageId && Date.now() - gRead.pageStart >= READ_NAV_SEC * 1000;
-                /* ★ 修复「连着翻页、跳过中间内容」（与刷课跳过中间视频同一类 bug）：
+                /* 修复「连着翻页、跳过中间内容」（与刷课跳过中间视频同一类 bug）：
                    goNextPage() 之后 currentPage 可能要过一会儿才更新，而旧实现每
                    READ_NAV_SEC(3s) 就无条件再点一次 —— 页面还没切走就被连点跳过。
                    现在：同一页只点一次；点过之后必须等 currentPage 真正切走才允许再点。
@@ -4180,7 +4223,7 @@ self.onmessage = function (e) {
                 const ext = imgExtFromMime(r.blob.type);
                 const fname = `${base}_处理_${dateKey()}.${ext}`;
                 imgDownloadBlob(r.blob, fname);
-                setStatus(`✓ 已下载 ${fname} · ${imgFmtSize(r.blob.size)}`);
+                setStatus(`已下载 ${fname} · ${imgFmtSize(r.blob.size)}`);
             } catch (e) { setStatus('下载失败：' + e.message, true); }
         };
     }
@@ -4482,7 +4525,7 @@ self.onmessage = function (e) {
                 <div class="dgut-gh-head">
                     <a class="dgut-gh-repo-link" href="${escapeHtml(r.html_url)}" target="_blank" rel="noopener noreferrer" title="打开项目主页">${GH_ICONS.external}<span>${escapeHtml(r.full_name)}</span></a>
                     <span class="dgut-gh-stats">
-                        <a class="dgut-gh-stat dgut-gh-stat--star" href="${escapeHtml(r.html_url)}/stargazers" target="_blank" rel="noopener noreferrer" title="去 GitHub 点个 Star ⭐">${GH_ICONS.star}<span>${ghFmtNum(r.stars)}</span><span class="dgut-gh-stat-label">Stars</span></a>
+                        <a class="dgut-gh-stat dgut-gh-stat--star" href="${escapeHtml(r.html_url)}/stargazers" target="_blank" rel="noopener noreferrer" title="去 GitHub 点个 Star">${GH_ICONS.star}<span>${ghFmtNum(r.stars)}</span><span class="dgut-gh-stat-label">Stars</span></a>
                         <a class="dgut-gh-stat" href="${escapeHtml(r.html_url)}/forks" target="_blank" rel="noopener noreferrer" title="Fork 数">${GH_ICONS.fork}<span>${ghFmtNum(r.forks)}</span><span class="dgut-gh-stat-label">Forks</span></a>
                         <a class="dgut-gh-stat" href="${escapeHtml(r.html_url)}/watchers" target="_blank" rel="noopener noreferrer" title="Watch 数">${GH_ICONS.eye}<span>${ghFmtNum(r.watchers)}</span><span class="dgut-gh-stat-label">Watch</span></a>
                     </span>
@@ -4518,7 +4561,7 @@ self.onmessage = function (e) {
                     <span>${cacheNote}</span>
                     <button class="dgut-gh-refresh-btn" id="dgut-gh-refresh" title="清除缓存并重新获取">${GH_ICONS.refresh} 刷新数据</button>
                 </div>
-                ${result.warn ? '<div class="dgut-gh-warnline">⚠ ' + escapeHtml(result.warn) + '（当前展示过期缓存数据）</div>' : ''}
+                ${result.warn ? '<div class="dgut-gh-warnline">' + escapeHtml(result.warn) + '（当前展示过期缓存数据）</div>' : ''}
             </div>`;
         // 头像加载失败 → 首字母圆形占位（部分站点 CSP 拦截外链图片时仍可辨认）
         container.querySelectorAll('.dgut-gh-avatar img').forEach(img => {
@@ -4535,10 +4578,10 @@ self.onmessage = function (e) {
     /* ============================================================
      * 详情页
      * ============================================================ */
-    /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
+    /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.10.1';
+    const ABOUT_VERSION = 'v5.11.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
@@ -4549,7 +4592,7 @@ self.onmessage = function (e) {
      * 发现新版本时给一个「立即更新」按钮：点了才打开油猴安装页，
      * **由用户在油猴弹窗里按下确认**后覆盖安装 —— 替换动作始终由用户决定。
      *
-     * ⚠ 安装链接必须以 `.user.js` 结尾：油猴只把「.user.js 结尾」的链接识别成可安装
+     * 注意：安装链接必须以 `.user.js` 结尾：油猴只把「.user.js 结尾」的链接识别成可安装
      *   脚本（官方 FAQ Q102），指向 `理工小助手.js` 只会显示源码、不弹安装页。
      *   所以仓库根目录同时发布了内容完全相同的 `理工小助手.user.js`，
      *   由 tools/prepare-publish.mjs 在发布时生成，并强制校验两者字节一致。
@@ -4666,7 +4709,7 @@ self.onmessage = function (e) {
                     <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);">
                         <label class="dgut-label"><input type="checkbox" id="dgut-auto-update" ${updateCheckOn() ? 'checked' : ''}> 自动检查更新（默认关闭）</label>
                         <button id="dgut-check-update" class="dgut-btn" style="margin-left:8px;">立即检查</button>
-                        <button id="dgut-do-update" class="dgut-btn" style="margin-left:8px;display:none;">⬆ 立即更新</button>
+                        <button id="dgut-do-update" class="dgut-btn" style="margin-left:8px;display:none;">立即更新</button>
                         <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。本脚本<strong>不会在后台自动替换</strong>自己：点「立即检查」看有没有新版本，发现新版后点「立即更新」打开油猴安装页，确认后覆盖安装。</div>
                         <div style="font-size:11px;color:var(--dgut-on-surface-variant);line-height:1.9;margin-top:4px;">
                             手动更新入口（油猴只识别 <code>.user.js</code> 结尾的链接）：
@@ -4705,7 +4748,7 @@ self.onmessage = function (e) {
                     const r = await fetchRemoteVersion();
                     const remote = r.version;
                     const local = ABOUT_VERSION.replace(/^v/i, '');
-                    /* ★ 无论有没有更新，都把「远端 / 本地」两个版本号一起显示。
+                    /* 无论有没有更新，都把「远端 / 本地」两个版本号一起显示。
                        否则用户看到「已是最新」时无法判断：是真的一样，
                        还是远端压根没取到、逻辑走偏了。 */
                     if (cmpVer(remote, local) > 0) {
@@ -4743,7 +4786,7 @@ self.onmessage = function (e) {
             const sc = window.__dgutSelfCheckResults || [];
             const scRows = sc.length ? sc.map(r => `
                 <div class="dgut-err-row">
-                    <span class="dgut-err-code" style="color:${r.ok ? 'var(--dgut-success)' : 'var(--dgut-error)'};">${r.ok ? '✓' : 'E' + r.errDef.code}</span>
+                    <span class="dgut-err-code" style="color:${r.ok ? 'var(--dgut-success)' : 'var(--dgut-error)'};">${r.ok ? 'OK' : 'E' + r.errDef.code}</span>
                     <span style="flex:1;">${escapeHtml(r.name)}</span>
                     <span style="flex:none;color:var(--dgut-on-surface-variant);">${r.ok ? '通过' : '未就绪'}</span>
                 </div>`).join('') : `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">自检尚未运行，请刷新页面。</div>`;
