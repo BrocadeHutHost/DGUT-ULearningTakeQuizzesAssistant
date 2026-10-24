@@ -1,4 +1,4 @@
-# DGUT 优学院助手 + 文档工具 Ciallo～(∠・ω< )⌒★
+# DGUT 优学院助手 + 文档工具
 
 > 一个专为东莞理工学院（DGUT）优学院平台编写的浏览器用户脚本。
 >
@@ -29,28 +29,28 @@
 - 更早版本的详细变更见 [Git 提交历史](https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant/commits/main)。
 
 > **更新方式**：脚本不会在后台自动替换自己。面板「详情页 → 作者与许可」→「立即检查」，
-> 发现新版本后点「⬆ 立即更新」并在油猴弹窗里确认；也可以直接重新安装 `理工小助手.user.js`
+> 发现新版本后点「立即更新」并在油猴弹窗里确认；也可以直接重新安装 `理工小助手.user.js`
 > （它与 `理工小助手.js` 内容完全一致）。
 
 > 如果你觉得这个脚本不错，帮我点点star( •̀ ω •́ )y<img width="67" height="36" alt="image" src="https://github.com/user-attachments/assets/171a0727-5371-4ddc-bfc0-1a87757f705e" />，BUG及功能改进请提交issue<img width="76" height="27" alt="image" src="https://github.com/user-attachments/assets/5d9c707f-6c60-458f-8efb-5daf38710566" />，想要参与项目请提交拉取请求<img width="119" height="32" alt="image" src="https://github.com/user-attachments/assets/186f668a-540c-4cc1-9483-326c253f7d38" />，实时获取更新提醒<img width="73" height="32" alt="image" src="https://github.com/user-attachments/assets/77341a9a-6c4e-4192-ab19-de6ff75ca38e" />
 
 ---
 
-## 效果截图
+## 功能截图
 
-> 截图可能来自旧版本，界面与功能以实际安装的脚本为准。
+> 以下为演示界面：课程名称、时间、作业标题等均为虚构，不含任何个人信息与真实课程数据。
 
-- 面板与功能总览
+### 面板与近七天日程
 
-<img width="767" height="452" alt="image" src="https://github.com/user-attachments/assets/9bdf12f3-feee-44d8-91a2-8d7b25f18fd8" />
+![近七天日程](screenshot-schedule.png)
 
-- md 转文档与签名效果
+### 刷课助手
 
-<img width="603" height="1048" alt="image" src="https://github.com/user-attachments/assets/7d300a11-77c0-4de1-a655-a602dd759976" />
+![刷课助手](screenshot-course.png)
 
-- 下载 PDF 的效果
+### 文档工具（Markdown 转 Word / PDF）
 
-<img width="877" height="526" alt="image" src="https://github.com/user-attachments/assets/f416c507-ae40-4f7b-8538-a026e4355764" />
+![文档工具](screenshot-docs.png)
 
 ---
 
@@ -114,7 +114,7 @@
 >
 > 说明：本仓库根目录下的 **`理工小助手.js`** 就是可直接安装的单文件脚本，复制粘贴它即可。
 > 旁边那份 **`理工小助手.user.js`** 与它**内容完全相同**，只是多了 `.user.js` 后缀——
-> 油猴只把 `.user.js` 结尾的链接识别成"可安装脚本"，面板里的「⬆ 立即更新」按钮要靠它才能弹出安装页。
+> 油猴只把 `.user.js` 结尾的链接识别成"可安装脚本"，面板里的「立即更新」按钮要靠它才能弹出安装页。
 > 本仓库只放可直接导入的单文件成品，不放开发用的拆分源码。
 
 ---
@@ -353,7 +353,7 @@ A: 只读优学院活动日历接口 `GET /courseapi/activitycalendar?startDate=
 A: 先确认已点击「启动」——**倍速守卫只在刷课助手运行中生效**。若启动后仍不变速：
 请先升级到当前版本（v5.10.0）并**刷新课件页**；旧版本在油猴沙箱里可能读/写不到真实媒体的播放速率
 （面板显示 6×、视频仍是 1×，日志无报错）。
-新版打开「🔍 详细调试日志」后，〔判定〕行会打印 `rate=实际值x(目标 Nx)`；出现
+新版打开「详细调试日志」后，〔判定〕行会打印 `rate=实际值x(目标 Nx)`；出现
 「倍速守卫：把播放速率重设为 Nx」说明守卫正在纠偏；出现「页面世界读回…（已用页面世界句柄修正）」
 说明沙箱兜底已生效。平台在每次视频加载（`loadedmetadata`）时都会把倍速重置回 1.00×，守卫会立即改回，属正常现象。
 
@@ -427,7 +427,7 @@ A: 请依次确认：① 主脚本已安装并启用；② 美化包已保存并
 
 对本仓库的要求很简单：
 
-- 根目录只出现可直接使用的单文件脚本，以及 `README.md`、`LICENSE`；
+- 根目录只出现可直接使用的单文件脚本、`README.md`、`LICENSE`，以及 README 演示用的 `screenshot-*.png`；
 - 不提交 `src/`、构建脚本、依赖清单或任何开发脚手架；
 - 发布新版本时**只更新对应的单文件脚本**，不要引入目录结构。
 
