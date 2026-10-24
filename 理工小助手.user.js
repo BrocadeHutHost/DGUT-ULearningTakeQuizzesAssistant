@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.10.0
+// @version      5.10.1
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1115,10 +1115,6 @@
     }
     function renderScheduleView(ac) {
         ac.innerHTML = actionHeader(ACTION_TITLES.schedule, '自动读取近七天日程 · 勾选后置灰 · 过期自动清理 · 无提醒') + `
-            <div class="dgut-hint">
-                因部分原因，本脚本已移除课程签到功能，请各位同学诚信签到打卡。<br>
-                日程来自优学院「活动日历」只读接口（近七天），不分类、不提醒；勾选状态只保存在本地。
-            </div>
             <div class="dgut-card dgut-card--tight">
                 <div class="dgut-row dgut-row--end" style="margin-bottom:8px;">
                     <button id="dgut-sched-refresh" class="dgut-btn">${icons.refresh} 刷新</button>
@@ -4542,7 +4538,7 @@ self.onmessage = function (e) {
     /* ★ 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.10.0';
+    const ABOUT_VERSION = 'v5.10.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
@@ -4690,9 +4686,6 @@ self.onmessage = function (e) {
                         · <b>Word 转 PDF</b>：本地解析 .docx 并导出 PDF / .doc<br>
                         · <b>图片工具</b>：缩放、压缩、增大文件、锐化 / 黑白 / 亮度均匀<br>
                         · <b>外观设置</b>：亮/暗/跟随系统主题 + 主体色
-                    </div>
-                    <div style="font-size:11px;margin-top:8px;color:var(--dgut-on-surface-variant);line-height:1.7;">
-                        因部分原因，本脚本已移除课程签到功能，请各位同学诚信签到打卡。
                     </div>
                 </div>`;
             renderGitHubInfo(contentEl.querySelector('#dgut-gh-info'));
