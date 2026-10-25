@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.12.3
+// @version      5.13.0
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -955,7 +955,10 @@
      *   beginTime / endTime 是**毫秒时间戳**。
      *
      * 本功能刻意保持极简：
-     *   · 只显示「近 7 天」的活动，按时间升序平铺，不分类、不筛选、不带提醒；
+     *   · 活动：只显示「近 7 天」的活动，按时间升序平铺，不分类、不筛选、不带提醒；
+     *   · 考试：活动日历接口**不返回考试**，所以另外按「课程 → 考试列表」取
+     *     （见下方 SCHED_EXAM_* 注释），只显示还没结束的、最多看 120 天，
+     *     列表里带一个「考试」小标签，与普通日程混排；
      *   · 每项一个勾选框，勾上后置灰（勾选状态只存本地）；
      *   · 过了截止时间自动从列表清理（不通知、不打扰）；
      *   · 只发只读 GET，不写任何服务端状态。
@@ -963,8 +966,21 @@
     const SCHED_WINDOW_DAYS = 7;
     const SCHED_REFRESH_MS = 5 * 60 * 1000;
     const SCHED_CACHE_MAX = 200;
+    /* 考试**不在**活动日历接口里（activitycalendar 只返回作业/讨论/直播等），
+       要按「课程 → 考试列表」单独取（2026-10 从站点前端代码核实）：
+         · 新版考试：GET https://utestapi.dgut.edu.cn/exams/student?ocId=<开课id>&pn=1&ps=N
+         · 旧版考试：GET {API_HOST}/courseapi/exams/student?ocId=<开课id>&keyword=&pn=1&ps=N
+       学生视图返回 { total, examList: [{ examId, title, startTime, endTime, ... }] }。
+       两套接口都试一次，先把有数据的那个记住，后续课程直接复用，避免每门课都探两遍。 */
+    const SCHED_EXAM_UTEST_BASE = 'https://utestapi.dgut.edu.cn';
+    const SCHED_EXAM_LEGACY_BASE = API_HOST + '/courseapi';
+    const SCHED_EXAM_COURSE_MAX = 30;          // 最多遍历多少门课（防止课程特别多时请求爆炸）
+    const SCHED_EXAM_PAGE_SIZE = 100;
+    const SCHED_EXAM_WINDOW_DAYS = 120;        // 未来考试最多看多远（活动仍是 7 天）
+    const SCHED_EXAM_REFRESH_MS = 30 * 60 * 1000;
     let gSchedItems = null, gSchedFetchedAt = 0, gSchedLoading = false, gSchedError = '', gSchedTimer = null;
     let gSchedFromCache = false, gSchedCacheAt = 0;
+    let gSchedExamItems = null, gSchedExamAt = 0, gSchedExamWarn = '', gSchedExamBase = '';
 
     GM_addStyle(`
         .dgut-sched-list { display: flex; flex-direction: column; gap: 6px; max-height: 430px; overflow-y: auto; }
@@ -979,6 +995,7 @@
         .dgut-sched-time { flex: none; font-family: Consolas, "Courier New", monospace; font-size: 12px; font-weight: 700; color: var(--dgut-primary); white-space: nowrap; }
         .dgut-sched-title { flex: 1; min-width: 0; word-break: break-all; }
         .dgut-sched-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--dgut-on-surface-variant); word-break: break-all; }
+        .dgut-sched-tag { flex: none; padding: 0 6px; border-radius: 999px; background: var(--dgut-primary-container); color: var(--dgut-primary); font-size: 11px; font-weight: 700; line-height: 18px; }
     `);
 
     function schedPad(n) { return String(n).padStart(2, '0'); }
@@ -1014,7 +1031,8 @@
     function schedCacheWrite(items) {
         try {
             const slim = (items || []).slice(0, SCHED_CACHE_MAX).map(it => ({
-                id: String(it.id), title: it.title, courseName: it.courseName || '',
+                id: String(it.id), kind: it.kind === 'exam' ? 'exam' : '',
+                title: it.title, courseName: it.courseName || '',
                 begin: Number(it.begin) || 0, end: Number(it.end) || 0,
                 t: Number(it.t) || 0, sortT: Number(it.sortT) || 0,
             }));
@@ -1041,7 +1059,7 @@
             const id = rawId != null ? String(rawId) : `${title}|${t}`;
             if (seen.has(id)) continue;
             seen.add(id);
-            out.push({ id, title, courseName: String(it.courseName || '').trim(), begin, end: finish, t, sortT: (begin && begin > now) ? begin : t });
+            out.push({ id, kind: '', title, courseName: String(it.courseName || '').trim(), begin, end: finish, t, sortT: (begin && begin > now) ? begin : t });
         }
         out.sort((a, b) => a.sortT - b.sortT);
         return out;
@@ -1050,6 +1068,125 @@
     function schedPrune(items, now) {
         now = Number(now) || Date.now();
         return (Array.isArray(items) ? items : []).filter(it => it && it.t > now);
+    }
+    /* ---------------- 考试（单独接口，不在活动日历里） ---------------- */
+    /* 考试时间可能是毫秒/秒时间戳，也可能是 "YYYY-MM-DD HH:mm" 字符串，统一成毫秒 */
+    function schedExamTime(v) {
+        if (v === null || v === undefined || v === '') return 0;
+        const n = Number(v);
+        if (isFinite(n) && n > 0) return n < 100000000000 ? n * 1000 : n;
+        const d = new Date(String(v).replace(/-/g, '/'));
+        const t = d.getTime();
+        return isNaN(t) ? 0 : t;
+    }
+    /** 从考试接口返回里取列表（兼容 { examList } / { list } / { result:{ examList } }；取不到返回 null） */
+    function schedExamListOf(res) {
+        if (!res || typeof res !== 'object') return null;
+        const box = res.result || res.data || res;
+        const list = box && (box.examList || box.examlist || box.list || (Array.isArray(box) ? box : null));
+        return Array.isArray(list) ? list : null;
+    }
+    /** 从课程接口返回里取课程列表（兼容 { courseList } / { list } / { result:{ courseList } }） */
+    function schedCourseListOf(res) {
+        if (!res || typeof res !== 'object') return [];
+        const box = res.result || res.data || res;
+        const list = box && (box.courseList || box.list || (Array.isArray(box) ? box : null));
+        return Array.isArray(list) ? list : [];
+    }
+    /** 把「课程考试列表」归一化成日程项（纯函数，便于回归测试）
+     *  · 考试 id 统一加 exam: 前缀，避免和活动日历的 activityId 撞号；
+     *  · 已经结束的考试不显示（t 用结束时间，进行中/未开始的都保留）；
+     *  · 窗口 SCHED_EXAM_WINDOW_DAYS 天，比活动的 7 天宽，因为考试通常提前很久公布；
+     *  · 考试本身不带 courseName，按课程 id 从课程表补。 */
+    function schedNormalizeExams(list, courseNameById, now) {
+        now = Number(now) || Date.now();
+        const winEnd = now + SCHED_EXAM_WINDOW_DAYS * 86400000;
+        const out = [], seen = new Set();
+        if (!Array.isArray(list)) return out;
+        const nameOf = courseNameById || {};
+        for (const it of list) {
+            if (!it || typeof it !== 'object') continue;
+            const title = String(it.title || it.name || it.examName || '').trim();
+            if (!title) continue;
+            const begin = schedExamTime(it.startTime != null ? it.startTime : (it.beginTime != null ? it.beginTime : it.examStartTime));
+            const finish = schedExamTime(it.endTime != null ? it.endTime : (it.examEndTime != null ? it.examEndTime : it.finishTime));
+            const last = finish || begin;             // 结束时间；只有开始时间时退回开始时间
+            if (!last || last < now) continue;        // 没有时间 / 已经结束 → 不显示
+            if (begin > winEnd || (!begin && last > winEnd)) continue;
+            const rawId = it.examId != null ? it.examId : (it.id != null ? it.id : '');
+            const id = 'exam:' + (rawId !== '' ? rawId : `${title}|${last}`);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const ocId = String(it.ocId != null ? it.ocId : (it.courseId != null ? it.courseId : ''));
+            out.push({
+                id, kind: 'exam', title,
+                courseName: String(it.courseName || nameOf[ocId] || '').trim(),
+                begin, end: finish, t: last,
+                sortT: (begin && begin > now) ? begin : last,
+            });
+        }
+        out.sort((a, b) => a.sortT - b.sortT);
+        return out;
+    }
+    function schedExamUrl(base, ocId) {
+        const q = 'ocId=' + encodeURIComponent(ocId) + '&pn=1&ps=' + SCHED_EXAM_PAGE_SIZE;
+        return base === SCHED_EXAM_LEGACY_BASE
+            ? base + '/exams/student?' + q + '&keyword='
+            : base + '/exams/student?' + q;
+    }
+    /** 取一门课的考试列表；第一次调用时两套接口都探一遍，有数据的那个会被记住 */
+    async function schedFetchExamList(ocId) {
+        const bases = gSchedExamBase ? [gSchedExamBase] : [SCHED_EXAM_UTEST_BASE, SCHED_EXAM_LEGACY_BASE];
+        let bestBase = '', bestList = null, lastErr = null;
+        for (const base of bases) {
+            try {
+                const res = await gmFetchEx(schedExamUrl(base, ocId));
+                const list = schedExamListOf(res);
+                if (!list) { lastErr = new Error('考试接口返回结构异常：' + String(apiRaw(res)).slice(0, 80)); continue; }
+                if (!bestList) { bestList = list; bestBase = base; }
+                /* 探测阶段：某个接口返回空列表时继续试下一个，避免「空数组也是成功」提前锁定错接口 */
+                if (!gSchedExamBase && list.length) { bestBase = base; bestList = list; break; }
+            } catch (e) { lastErr = e; }
+        }
+        if (bestList) { gSchedExamBase = bestBase; return bestList; }
+        if (lastErr) throw lastErr;
+        return [];
+    }
+    /** 拉取「我所有课程的考试」：课程列表 → 逐门课取考试 → 归一化 */
+    async function schedFetchExams() {
+        const now = Date.now();
+        if (gSchedExamItems && now - gSchedExamAt < SCHED_EXAM_REFRESH_MS) return gSchedExamItems;
+        const res = await gmFetchEx(`${API_HOST}/courseapi/courses/students?keyword=&publishStatus=1&type=1&pn=1&ps=50`);
+        const nameById = {}, ids = [];
+        for (const c of schedCourseListOf(res)) {
+            if (ids.length >= SCHED_EXAM_COURSE_MAX) break;
+            if (!c || typeof c !== 'object') continue;
+            const rawId = c.ocId != null ? c.ocId : (c.courseId != null ? c.courseId : c.id);
+            const id = rawId == null ? '' : String(rawId);
+            if (!id) continue;
+            ids.push(id);
+            nameById[id] = String(c.courseName || c.name || '').trim();
+        }
+        const raw = [];
+        let failCount = 0, lastErr = null;
+        for (const id of ids) {
+            try {
+                const list = await schedFetchExamList(id);
+                for (const it of list) {
+                    if (!it || typeof it !== 'object') continue;
+                    raw.push(it.ocId == null && it.courseId == null ? Object.assign({ ocId: id }, it) : it);
+                }
+            } catch (e) {
+                /* 单门课失败不影响其他课程（网络抖动/某门课没有考试权限），
+                   但全部课程都失败时要把错误抛出去，状态栏才会提示「考试读取失败」 */
+                failCount++; lastErr = e;
+                try { if (typeof chLog === 'function') chLog('日程：课程 ' + id + ' 的考试读取失败：' + ((e && e.message) || e), 'muted'); } catch (e2) {}
+            }
+        }
+        if (ids.length && failCount === ids.length && lastErr) throw lastErr;
+        gSchedExamItems = schedNormalizeExams(raw, nameById, now);
+        gSchedExamAt = now;
+        return gSchedExamItems;
     }
     function schedRenderStatus(text, isError) {
         const st = document.getElementById('dgut-sched-status');
@@ -1068,6 +1205,7 @@
             return;
         }
         gSchedLoading = true; gSchedError = '';
+        gSchedExamWarn = '';
         schedRenderStatus((gSchedItems || []).length ? '正在刷新…' : '正在读取日程…');
         try {
             const now = new Date();
@@ -1077,6 +1215,15 @@
             const raw = (res && (res.activityList || res.result || res.list || (res.data && (res.data.list || res.data.items)))) || [];
             if (!Array.isArray(raw)) throw new Error('接口返回结构异常：' + apiRaw(res));
             gSchedItems = schedNormalize(raw, Date.now());
+            /* 考试不在活动日历接口里：单独按「课程 → 考试」取。
+               考试读取失败不影响活动日程，只在状态栏提示一句。 */
+            try {
+                const exams = await schedFetchExams();
+                if (exams && exams.length) gSchedItems = gSchedItems.concat(exams);
+                gSchedItems.sort((a, b) => a.sortT - b.sortT);
+            } catch (e) {
+                gSchedExamWarn = '考试读取失败：' + ((e && e.message) || e);
+            }
             gSchedFetchedAt = Date.now();
             gSchedFromCache = false;
             gSchedCacheAt = gSchedFetchedAt;
@@ -1104,10 +1251,15 @@
         if (gSchedLoading) schedRenderStatus('正在刷新…');
         else if (gSchedError) schedRenderStatus(gSchedError, true);
         else if (gSchedFromCache) schedRenderStatus(`本地缓存 · 更新于 ${schedFmtTime(gSchedCacheAt)}`);
-        else schedRenderStatus(`共 ${gSchedItems.length} 项 · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')}`);
+        else {
+            const examN = gSchedItems.filter(it => it.kind === 'exam').length;
+            const line = `共 ${gSchedItems.length} 项` + (examN ? `（含考试 ${examN} 项）` : '') +
+                ` · 更新于 ${new Date(gSchedFetchedAt || now).toLocaleTimeString('zh-CN')}`;
+            schedRenderStatus(gSchedExamWarn ? line + ' · ' + gSchedExamWarn : line);
+        }
         if (!box) return;
         if (!gSchedItems.length) {
-            box.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:18px 8px;font-size:13px;">${gSchedError ? '读取失败，可点上方「刷新」重试。' : '近七天暂无日程（或已全部过期）。'}</div>`;
+            box.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:18px 8px;font-size:13px;">${gSchedError ? '读取失败，可点上方「刷新」重试。' : '近七天没有日程，也没有未来的考试。'}</div>`;
             return;
         }
         box.innerHTML = gSchedItems.map(it => {
@@ -1120,7 +1272,7 @@
                 <label>
                     <input type="checkbox" data-sid="${escapeHtml(it.id)}" ${isDone ? 'checked' : ''}>
                     <span class="dgut-sched-main">
-                        <span class="dgut-sched-line"><span class="dgut-sched-time">${escapeHtml(when)}</span><span class="dgut-sched-title">${escapeHtml(it.title)}</span></span>
+                        <span class="dgut-sched-line">${it.kind === 'exam' ? '<span class="dgut-sched-tag">考试</span>' : ''}<span class="dgut-sched-time">${escapeHtml(when)}</span><span class="dgut-sched-title">${escapeHtml(it.title)}</span></span>
                         ${it.courseName ? `<span class="dgut-sched-sub">${escapeHtml(it.courseName)}</span>` : ''}
                     </span>
                 </label>
@@ -1158,7 +1310,7 @@
                 </div>
                 <div id="dgut-sched-list" class="dgut-sched-list"></div>
             </div>`;
-        ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; gSchedFromCache = false; schedFetch(true); };
+        ac.querySelector('#dgut-sched-refresh').onclick = () => { gSchedFetchedAt = 0; gSchedExamAt = 0; gSchedFromCache = false; schedFetch(true); };
         /* 首次打开先读本地缓存，立即可见；随后在优学院页面上再尝试刷新 */
         if (!gSchedItems) {
             const c = schedCacheRead();
@@ -4652,7 +4804,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.12.3';
+    const ABOUT_VERSION = 'v5.13.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
