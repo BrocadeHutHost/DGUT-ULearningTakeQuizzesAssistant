@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.1
+// @version      5.13.2
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -973,16 +973,24 @@
     const SCHED_CACHE_MAX = 200;
     /* 考试**不在**活动日历接口里（activitycalendar 只返回作业/讨论/直播等），
        要按「课程 → 考试列表」单独取（2026-10 从站点前端代码核实）：
-         · 新版考试：GET https://utestapi.dgut.edu.cn/exams/student?ocId=<开课id>&pn=&ps=
-         · 旧版考试：GET https://courseapi.dgut.edu.cn/exams/student?ocId=<开课id>&keyword=&pn=&ps=
-         · 旧版兜底：GET {API_HOST}/courseapi/exams/student?...（lms 代理）
+         · 新版考试（DGUT 学生实际走这套）：
+             GET https://lms.dgut.edu.cn/utestapi/exams/student?ocId=<开课id>&pn=&ps=
+         · 旧版考试（lms 反代兜底）：
+             GET https://lms.dgut.edu.cn/courseapi/exams/student?ocId=<开课id>&keyword=&pn=&ps=
        站点 init.js 里的 $.ajaxSetup 会给**所有**业务请求额外加 `Authorization` 和
-       `version: 1` 两个头，考试接口本身是带 cookie 的请求；v5.13.0 只带了 Authorization，
-       实测被服务端以 HTTP 400 拒绝，v5.13.1 补上 version 头 + cookie，并把 ps 降到站点
-       默认的 20（分页拉取）。学生视图返回 { total, examList: [{ examId, title, startTime, endTime, ... }] }。 */
+       `version: 1` 两个头，考试接口本身也是带 cookie 的请求，所以这里一并带上。
+       学生视图返回 { total, examList: [{ examId, title, startTime, endTime, ... }] }。 */
+    /* 注意：**不要直连 utestapi / courseapi 子域**。实测（2026-10）访问
+       `https://utestapi.dgut.edu.cn/...`、`https://courseapi.dgut.edu.cn/...` 会被校园网关
+       （Server: DPtech）302 到 `https://nic.dgut.edu.cn/ymwzd404.htm`，油猴这边只表现为
+       「网络请求失败」；正确入口是 lms 自己的 nginx 反代：
+         · `/utestapi/...`  → 新版考试系统
+         · `/courseapi/...` → 旧版考试系统（DGUT 已没有 `/exams/student` 路由：
+           鉴权通过后会命中 `/exams/{examId}`，返回
+           `NumberFormatException: For input string: "student"` 的 400）
+       两个反代都返回 `Access-Control-Allow-Origin: *`，不需要额外的跨域处理。 */
     const SCHED_EXAM_BASES = [
-        'https://utestapi.dgut.edu.cn',
-        'https://courseapi.dgut.edu.cn',
+        API_HOST + '/utestapi',
         API_HOST + '/courseapi',
     ];
     const SCHED_EXAM_COURSE_MAX = 30;          // 最多遍历多少门课（防止课程特别多时请求爆炸）
@@ -4841,7 +4849,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.1';
+    const ABOUT_VERSION = 'v5.13.2';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
