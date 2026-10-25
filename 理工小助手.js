@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.12.0
+// @version      5.12.1
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -2833,30 +2833,28 @@
         const local = gRead ? gRead.total : rdBookTime(key);
         return (s !== null && s > 0) ? s : local;
     }
-    /** 上方大号时间 = 服务端时长（取不到时退回本地）；下方小字同时显示服务端/本地，便于对齐 */
+    /** 上方大号时间 = 本地累计；下方小字 = 服务端时长 */
     function rdRenderTimes() {
         const key = gRead ? gRead.bookKey : rdBookKey();
         const local = gRead ? gRead.total : rdBookTime(key);
         const s = rdServerTotal(key);
         const tEl = document.getElementById('dgut-rd-timer');
-        if (tEl) tEl.textContent = rdFmt((s !== null && s > 0) ? s : local);
+        if (tEl) tEl.textContent = rdFmt(local);
         const sEl = document.getElementById('dgut-rd-server');
-        if (!sEl) return;
-        if (s === null) sEl.textContent = `服务端: 获取失败 · 本地 ${rdFmt(local)}`;
-        else if (s === 0) sEl.textContent = `服务端: 暂无记录 · 本地 ${rdFmt(local)}`;
-        else sEl.textContent = `服务端 ${rdFmt(s)} · 本地 ${rdFmt(local)}${s < local ? '（切换按服务端判定）' : ''}`;
+        if (sEl) sEl.textContent = '服务端: ' + ((s !== null && s > 0) ? rdFmt(s) : '--');
     }
-    /** 刷新服务端时长；alignUp=true 时把本地落后部分补到服务端值（只增不减，避免误删阅读进度） */
-    function rdRefreshServer(alignUp) {
+    /** 刷新服务端时长；同步本地时间：
+        - syncLocal=true：手动同步，直接把本地对齐到服务端；
+        - syncLocal=false：自动刷新，仅在检测到服务端时长变化时对齐。 */
+    function rdRefreshServer(syncLocal) {
         const key = gRead ? gRead.bookKey : rdBookKey();
         const s = rdServerTotal(key);
         if (s === null) { rdRenderTimes(); return null; }
-        if (alignUp && s > 0) {
-            const local = gRead ? gRead.total : rdBookTime(key);
-            if (s > local) {
-                rdSetBookTime(key, s);
-                if (gRead) { gRead.total = s; gRead.accumulated = s; gRead.sessionStart = Date.now(); gRead.lastSave = s; }
-            }
+        const prev = gRead ? gRead.serverTotal : null;
+        const changed = (prev !== null && s !== prev);
+        if (s > 0 && (syncLocal || changed)) {
+            rdSetBookTime(key, s);
+            if (gRead) { gRead.total = s; gRead.accumulated = s; gRead.sessionStart = Date.now(); gRead.lastSave = s; }
         }
         if (gRead) { gRead.serverTotal = s; gRead.lastServerAt = Date.now(); }
         rdRenderTimes();
@@ -2867,7 +2865,7 @@
         rdStopViewTimer();
         gRdViewTimer = setInterval(() => {
             if (!document.getElementById('dgut-rd-timer')) { rdStopViewTimer(); return; }   // 离开读书视图就停
-            rdRefreshServer(true);
+            rdRefreshServer(false);
         }, READ_VIEW_REFRESH_MS);
     }
     function rdFlatList(vm) {
@@ -2910,7 +2908,7 @@
         const key = rdBookKey();
         if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; gRead.serverTotal = null; gRead.lastServerAt = 0; }
         /* 阅读中定期刷新服务端时长；本地累计落后时自动补到服务端值 */
-        if (Date.now() - (gRead.lastServerAt || 0) >= READ_SERVER_POLL_SEC * 1000) rdRefreshServer(true);
+        if (Date.now() - (gRead.lastServerAt || 0) >= READ_SERVER_POLL_SEC * 1000) rdRefreshServer(false);
         if (vm && vm.currentPage) {
             const list = rdFlatList(vm);
             const pid = rdPageId(vm.currentPage());
@@ -2992,7 +2990,7 @@
                 <div style="text-align:center;font-size:12px;color:var(--dgut-on-surface-variant);margin:4px 0 12px;" id="dgut-rd-server">服务端: --</div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">翻页间隔 <input type="number" id="dgut-rd-sec" class="dgut-input" value="${cfg.readerSec}" min="1" style="width:64px;padding:4px 6px;"> 秒/页</label>
-                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">切换按服务端时长（满 4h10m）判定</span>
+                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">满 4h10m 后自动切书</span>
                 </div>
                 <div class="dgut-row dgut-row--end">
                     <button id="dgut-rd-save" class="dgut-btn">${icons.settings} 保存间隔</button>
@@ -3006,18 +3004,10 @@
         ac.querySelector('#dgut-rd-start').onclick = () => { rdSaveCfg({ readerSec: readSec() }); rdStart(); };
         ac.querySelector('#dgut-rd-stop').onclick = rdStop;
         ac.querySelector('#dgut-rd-sync').onclick = () => {
-            const key = rdBookKey();
-            const st = rdServerTimes();
-            if (!st) { showStatus('服务端数据获取失败：请确认在课件页且视图模型已加载', true); return; }
-            const sv = Number(st[key]) || 0;
-            if (!sv) { showStatus('服务端暂无本书阅读记录'); return; }
-            const local = gRead ? gRead.total : rdBookTime(key);
-            const target = Math.max(local, sv);
-            rdSetBookTime(key, target);
-            if (gRead) { gRead.total = target; gRead.accumulated = target; gRead.sessionStart = Date.now(); gRead.lastSave = target; gRead.serverTotal = sv; gRead.lastServerAt = Date.now(); }
-            rdRenderTimes();
-            if (target > local) showStatus(`已对齐：本地 ${rdFmt(local)} → ${rdFmt(target)}（服务端 ${rdFmt(sv)}）`);
-            else showStatus(`本地 ${rdFmt(local)} / 服务端 ${rdFmt(sv)}，切书按服务端判定`);
+            const s = rdRefreshServer(true);
+            if (s === null) { showStatus('同步失败', true); return; }
+            if (!s) { showStatus('服务端暂无记录'); return; }
+            showStatus('已同步');
         };
         rdRefreshServer(false);   // 打开视图先拉一次服务端时长
         rdStartViewTimer();       // 停留在视图期间每 30 秒自动刷新
@@ -4653,7 +4643,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.12.0';
+    const ABOUT_VERSION = 'v5.12.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
