@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.12.2
+// @version      5.12.3
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1430,13 +1430,58 @@
         try { return Array.prototype.indexOf.call(document.querySelectorAll('video'), v); } catch (e) { return -1; }
     }
     function pgRateClamp(v) { const n = Number(v); return Math.max(1, Math.min(16, isFinite(n) && n > 0 ? n : 6)); }
+    /* 页面世界脚本桥：直接在页面上下文按原生 descriptor 写 playbackRate，
+       绕过沙箱包装 / 站点在 video 实例上加的同名 getter/setter。 */
+    function pgInjectRateBridge() {
+        try {
+            if (PAGE_WIN.__dgutRateBridge) return true;
+            const code = `(function(){
+  if (window.__dgutRateBridge) return;
+  function apply(){
+    var st = window.__dgutRateBridge; var t = Number(st.target) || 0;
+    if (t <= 0) return;
+    var lists = [];
+    try { lists.push(document.querySelectorAll('mediaelementwrapper video:first-child')); } catch (e) {}
+    lists.push(document.querySelectorAll('video'));
+    var proto = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
+    for (var li = 0; li < lists.length; li++) {
+      var vs = lists[li];
+      for (var i = 0; i < vs.length; i++) {
+        var v = vs[i];
+        try {
+          if (Object.getOwnPropertyDescriptor(v, 'playbackRate')) { try { delete v.playbackRate; } catch (e) {} }
+          if (proto && proto.set) proto.set.call(v, t); else v.playbackRate = t;
+        } catch (e) { try { v.playbackRate = t; } catch (e2) {} }
+      }
+    }
+  }
+  window.__dgutRateBridge = { target: 0, apply: apply };
+  setInterval(apply, 400);
+  document.addEventListener('loadedmetadata', apply, true);
+  document.addEventListener('play', apply, true);
+})();`;
+            const s = document.createElement('script');
+            s.textContent = code;
+            (document.head || document.documentElement).appendChild(s);
+            s.remove();
+            return !!PAGE_WIN.__dgutRateBridge;
+        } catch (e) { return false; }
+    }
+    function pgBridgeApply(t) {
+        try {
+            if (!PAGE_WIN.__dgutRateBridge && !pgInjectRateBridge()) return false;
+            PAGE_WIN.__dgutRateBridge.target = t;
+            PAGE_WIN.__dgutRateBridge.apply();
+            return true;
+        } catch (e) { return false; }
+    }
     const pgRateGuard = {
         target: 6, active: false, hooked: new WeakSet(),
         resetHistory: [], learnedInterval: 600, timer: null, lastDiagKey: '', lastDiagAt: 0,
         init() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
         refresh() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
-        start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
-        stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } },
+        start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); pgInjectRateBridge(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
+        stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } try { if (PAGE_WIN.__dgutRateBridge) PAGE_WIN.__dgutRateBridge.target = 0; } catch (e) {} },
         /* 纯属性读写：不做 descriptor，任何 realm / 沙箱下都成立。
            读不到/不是有限数 → 返回 0，这样「与 target 的差」必然 > 0.01，一定会触发 set。 */
         get(v) { try { const r = Number(v && v.playbackRate); return isFinite(r) ? r : 0; } catch (e) { return 0; } },
@@ -1454,7 +1499,10 @@
                     if (pv && pv !== v) { pv.playbackRate = r; pageSet = true; }
                 } catch (e) {}
             }
-            return { ok: ok, pageSet: pageSet };
+            /* 沙箱 / 页面句柄都改不动时，交给页面世界脚本用原生 setter 写 */
+            let bridgeSet = false;
+            if (!ok) bridgeSet = pgBridgeApply(r);
+            return { ok: ok, pageSet: pageSet, bridgeSet: bridgeSet };
         },
         hookAll() { document.querySelectorAll('video').forEach(v => this.hook(v)); },
         hook(v) {
@@ -1494,7 +1542,7 @@
                         this.lastDiagKey = key; this.lastDiagAt = now;
                         try {
                             if (typeof chLog === 'function') {
-                                chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x' + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '') + (fixed ? '（已用页面世界句柄修正）' : '（仍未生效，可能被站点限速/覆盖）'), 'warn');
+                                chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x' + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '') + (fixed ? (r.bridgeSet ? '（已用页面脚本修正）' : '（已用页面世界句柄修正）') : '（仍未生效）'), 'warn');
                             }
                         } catch (e) {}
                     }
@@ -1531,6 +1579,7 @@
             if (!this.active) return;
             try {
                 this.refresh(); this.hookAll();
+                pgBridgeApply(this.target);   // 页面世界持续兜底，站点每 400ms 内会被改回设定值
                 document.querySelectorAll('video').forEach(v => this.applyTo(v, '定时检查'));
             } catch (e) {
                 try { if (typeof dbgErr === 'function') dbgErr('倍速', 'enforce 异常: ' + ((e && e.message) || e)); } catch (e2) {}
@@ -4603,7 +4652,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.12.2';
+    const ABOUT_VERSION = 'v5.12.3';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
