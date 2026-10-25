@@ -1063,7 +1063,7 @@
         /* 任意窗口都能刷新：缓存存在时用已授权的 Cookie 取 Token 直接联网；
            从未缓存过时才要求先在优学院页面打开一次 */
         if (!force && !gSchedCacheAt && !(gSchedItems || []).length) {
-            gSchedError = '暂无本地缓存：请先在优学院页面打开一次「近七天日程」，之后即可直接查看。';
+            gSchedError = '暂无缓存，请先在优学院页面打开一次日程。';
             renderScheduleList();
             return;
         }
@@ -2419,7 +2419,7 @@
         if (!isCoursePage()) { showStatus(errFull(ERR.COURSE_NO_PAGE), true); return; }
         const ifr = detectIframe();
         if (!ifr.hasVideo && !ifr.hasVM && document.querySelectorAll('.question-element-node').length === 0) {
-            showToastCard('未检测到课件元素', ifr.isTop ? '本帧未找到 video / 课件视图模型，刷课助手启动后会空转。' : '当前在 iframe 中，请到顶层页面打开面板。', '', 10000);
+            showToastCard('未检测到课件元素', '请确认当前在课件页。', '', 10000);
         }
         gPgEpoch++;
         gPgSkippedPages.clear();
@@ -2454,25 +2454,18 @@
     }
     function renderCourseView(ac) {
         const cfg = getCourseHelperConfig();
-        const onPage = isCoursePage();
         const ifr = detectIframe();
-        ac.innerHTML = actionHeader(ACTION_TITLES.course, '课件视频倍速、自动答题、自动翻页与题库') + `
-            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '当前已在课件页，可直接启动。' : '当前不在课件页。请先在优学院打开具体课件（地址含 <b>ua.dgut.edu.cn/learnCourse</b>），再回到此处启动。'}
-                ${(!ifr.isTop) ? '<br><span style="color:var(--dgut-error);">当前运行在 iframe 中，刷课逻辑只在顶层查找 video/视图模型，可能空转。</span>' : ''}
-            </div>
+        ac.innerHTML = actionHeader(ACTION_TITLES.course) + `
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">视频倍速 <input type="number" id="dgut-ch-rate" class="dgut-input" value="${cfg.rate}" min="1" max="16" step="0.5" style="width:60px;padding:4px 6px;"></label>
                 </div>
                 <div class="dgut-row dgut-row--mb">
-                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题（答案源：视图模型/题库/接口）</label>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-answer" ${cfg.autoAnswer ? 'checked' : ''}> 自动答题</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-next" ${cfg.autoNext ? 'checked' : ''}> 自动翻页</label>
                     <label class="dgut-label"><input type="checkbox" id="dgut-ch-bank" ${cfg.collectBank ? 'checked' : ''}> 收集题库</label>
-                    <label class="dgut-label" title="排查「为什么跳页」这类问题时打开：决策链路里每个分支、每个 try/catch 都会写进下面的日志框，重点行标红。日志量较大，平时建议关闭。"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 详细调试日志</label>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-ch-debug" ${dbgOn() ? 'checked' : ''}> 详细调试日志</label>
                 </div>
-                <div class="dgut-hint" style="margin-bottom:10px;">遇到跳页时：打开上面的<b>详细调试日志</b> → 复现一次 → 点<b>复制日志</b>把内容发给开发者。日志里会写明每次翻页是<b>谁发起的、当时的站点标记是什么</b>。</div>
-                <div class="dgut-hint" style="margin-bottom:10px;">取不到答案时<b>不会提交</b>，会重试 <b>${PG_MAX_NO_ANSWER_ROUNDS}</b> 轮；视频停滞超过 <b>${Math.round(PG_STALL_MS / 1000)}s</b> 会自动尝试恢复。</div>
                 <div id="dgut-ch-status" style="font-size:12px;margin-bottom:10px;color:var(--dgut-on-surface-variant);"></div>
                 <div class="dgut-row dgut-row--end">
                     <button id="dgut-ch-save" class="dgut-btn">${icons.settings} 保存设置</button>
@@ -2645,7 +2638,7 @@
         });
         list.sort((a, b) => peerToMs(b.time) - peerToMs(a.time));
         if (!list.length) {
-            el.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:20px;font-size:13px;">暂无互评记录。请打开作业互评详情页后点击"扫描当前作业"。</div>`;
+            el.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:20px;font-size:13px;">暂无记录</div>`;
             return;
         }
         el.innerHTML = list.map(r => {
@@ -2744,11 +2737,7 @@
         return user;
     }
     function renderPeerView(ac) {
-        const onPage = !!peerParseParams();
-        ac.innerHTML = actionHeader(ACTION_TITLES.peer, '读取互评接口，汇总与筛选记录') + `
-            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '? 当前在作业互评详情页，可点击"扫描当前作业"。' : '请在作业互评详情页（URL 含 <b>stuDetail/学号/作业ID</b>）打开本面板，再扫描。'}
-            </div>
+        ac.innerHTML = actionHeader(ACTION_TITLES.peer) + `
             <div class="dgut-row dgut-row--mb">
                 <input id="dgut-peer-ftext" class="dgut-input" placeholder="按评价人姓名/学号筛选" style="flex:1;min-width:120px;">
                 <input id="dgut-peer-fscore" class="dgut-input" placeholder="分数 80-95 / >90" style="width:130px;">
@@ -2952,7 +2941,7 @@
         const vm = rdVm();
         if (!vm) {
             showStatus(errFull(ERR.READ_NO_VM), true);
-            showToastCard('求是读书未启动', '未找到课件视图模型 koLearnCourseViewModel，可能不在课件页或运行在 iframe 中。', '', 8000);
+            showToastCard('求是读书未启动', '请打开课件页后重试。', '', 8000);
             return;
         }
         const key = rdBookKey();
@@ -2977,14 +2966,7 @@
     }
     function renderReadView(ac) {
         const cfg = rdCfg();
-        const vm = rdVm();
-        const onPage = /\/learnCourse\//i.test(location.href) || (vm && vm.currentPage);
-        const hasVm = !!vm;
-        ac.innerHTML = actionHeader(ACTION_TITLES.read, '课件阅读时长统计与自动翻页') + `
-            <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '当前在课件页，可开始求是阅读。' : '请先在优学院打开求是读书课件页（地址含 <b>ua.dgut.edu.cn/learnCourse/learnCourse.html</b>）。'}
-                ${!hasVm ? '<br><span style="color:var(--dgut-error);">未检测到 koLearnCourseViewModel，启动后会空转。</span>' : ''}
-            </div>
+        ac.innerHTML = actionHeader(ACTION_TITLES.read) + `
             <div class="dgut-card">
                 <div style="text-align:center;font-size:30px;font-weight:700;color:var(--dgut-primary);font-family:Consolas,monospace;" id="dgut-rd-timer">${rdFmt(rdBookTime(rdBookKey()))}</div>
                 <div style="text-align:center;font-size:12px;color:var(--dgut-on-surface-variant);margin:4px 0 12px;" id="dgut-rd-server">服务端: --</div>
@@ -3316,7 +3298,7 @@ ${signaturesHtml(signatures)}
         if (!el) return;
         const sigs = getSignatures();
         if (!sigs.length) {
-            el.innerHTML = `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">暂无保存的签名。画完后点「保存签名」。</div>`;
+            el.innerHTML = `<div style="font-size:12px;color:var(--dgut-on-surface-variant);padding:6px 0;">暂无签名</div>`;
             return;
         }
         el.innerHTML = sigs.slice().reverse().map(s => `
@@ -3338,10 +3320,10 @@ ${signaturesHtml(signatures)}
     function renderDocToolView(ac) {
         const draft = getDocDraft();
         const title = getDocTitle();
-        ac.innerHTML = actionHeader(ACTION_TITLES.doc, 'Markdown 转 Word / PDF（PDF 直出下载）+ 手绘电子签名') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.doc) + `
             <div class="dgut-card">
                 <div class="dgut-section-title">Markdown 内容</div>
-                <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…&#10;支持标准语法：# 标题、**粗体**、*斜体*、- 列表、\`代码\`、\`\`\`代码块\`\`\`、> 引用、| 表格 | 等。" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
+                <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
                 <div class="dgut-row" style="margin-top:10px;">
                     <input id="dgut-doc-title" class="dgut-input" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;">
                     <button id="dgut-doc-preview" class="dgut-btn">${icons.list} 预览</button>
@@ -3354,21 +3336,14 @@ ${signaturesHtml(signatures)}
             </div>
             <div class="dgut-card">
                 <div class="dgut-section-title">手绘电子签名</div>
-                <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-bottom:8px;line-height:1.7;">在下方画板手写签名（支持鼠标/触屏/触控笔）。保存后勾选需要附加到导出文档末尾的签名。签名以透明 PNG 形式嵌入 Word/PDF。</div>
-                <input id="dgut-sig-name" class="dgut-input" placeholder="签名标签（如：本人签名、导师签字）" style="width:100%;margin-bottom:8px;">
+                <input id="dgut-sig-name" class="dgut-input" placeholder="签名标签" style="width:100%;margin-bottom:8px;">
                 <canvas id="dgut-sig-canvas"></canvas>
                 <div class="dgut-row dgut-row--end" style="margin-top:10px;">
                     <button id="dgut-sig-clear" class="dgut-btn">清除画布</button>
                     <button id="dgut-sig-save" class="dgut-btn dgut-btn-primary">${icons.add} 保存签名</button>
                 </div>
-                <div style="font-size:12px;color:var(--dgut-on-surface);font-weight:600;margin:14px 0 6px;">已保存签名（勾选=附加到导出文档）</div>
+                <div style="font-size:12px;color:var(--dgut-on-surface);font-weight:600;margin:14px 0 6px;">已保存签名</div>
                 <div id="dgut-sig-list" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
-            </div>
-            <div class="dgut-hint">
-                <b>导出说明</b>：<br>
-                · <b>下载 PDF</b>：生成需要几秒钟，请耐心等待<br>
-                · <b>打印 PDF</b>：打开打印视图，在打印对话框中选择"另存为 PDF"（文字为矢量，体积更小）；<br>
-                · 所有处理均在浏览器本地完成，内容不上传任何服务器。
             </div>`;
         const mdEl = ac.querySelector('#dgut-doc-md');
         const titleEl = ac.querySelector('#dgut-doc-title');
@@ -3458,16 +3433,7 @@ ${signaturesHtml(signatures)}
         return { html: result.value || '', messages: result.messages || [] };
     }
     function renderWordPdfView(ac) {
-        ac.innerHTML = actionHeader(ACTION_TITLES.wordpdf, '本地解析 .docx → 直接下载 PDF / 打印视图 / 导出 .doc') + `
-            <div class="dgut-hint">
-                <b>使用步骤</b><br>
-                1. 选择 <code>.docx</code> 文件（Word 2007 及以上格式）<br>
-                2. 点「下载 PDF」→ 本地生成 A4 PDF 并直接保存，<b>无需打印对话框</b><br>
-                3. 或点「打印 PDF」→ 新窗口按 <b>Ctrl/Cmd + P</b>，目标选「另存为 PDF」<br>
-                4. 或点「导出为 .doc」下载 Word 可直接编辑的文件<br>
-                <span style="color:var(--dgut-warn);">仅支持 <code>.docx</code>；旧版 <code>.doc</code> 二进制格式请先用 Word 另存为 .docx。</span><br>
-                <b>依赖说明</b>：首次使用时会自动从 CDN 加载 mammoth / html2canvas / jsPDF（jsDelivr 主源，unpkg 备源，失败后走 GM 拉取），需联网。
-            </div>
+        ac.innerHTML = actionHeader(ACTION_TITLES.wordpdf) + `
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
                     <input type="file" id="dgut-wp-file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="dgut-input" style="flex:1;min-width:0;">
@@ -4076,16 +4042,7 @@ self.onmessage = function (e) {
         const saved = imgLoadCfg();
         const ratioOpts = IMG_RATIO_PRESETS.map(p => `<option value="${p.id}" ${p.id === saved.ratioPreset ? 'selected' : ''}>${p.label}</option>`).join('');
         const opt = (v, cur) => v === cur ? ' selected' : '';
-        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 灰度 / 亮度均匀（像素处理多线程）') + `
-            <div class="dgut-hint">
-                <b>说明</b><br>
-                · 所有处理均在浏览器本地完成，图片不上传服务器。<br>
-                · <b>像素滤镜（锐化/灰度/亮度均匀）默认在 Web Worker 中执行</b>，不阻塞主线程；不可用时自动回退主线程。<br>
-                · <b>平滑</b>除极限情况下建议保持「高质量」。<br>
-                · 压缩：填了「目标大小」时，脚本自动调节质量逼近该大小；未填时，使用「输出质量」。<br>
-                · 锐化会增加画面细节，JPEG/WebP 默认会自动压低一点质量，尽量不超过原图大小。<br>
-                · 增大：将图片增大到指定大小，注意不是超分。
-            </div>
+        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool) + `
             <div class="dgut-card">
                 <div class="dgut-row dgut-row--mb">
                     <input type="file" id="dgut-img-file" accept="image/*" class="dgut-input" style="flex:1;min-width:0;">
@@ -4120,9 +4077,9 @@ self.onmessage = function (e) {
                     </label>
                     <label class="dgut-label" data-when="dimensions">适配
                         <select id="dgut-img-fit" class="dgut-select" style="padding:5px 8px;">
-                            <option value="contain"${opt('contain', saved.fit)}>包含（完整显示，留边）</option>
-                            <option value="cover"${opt('cover', saved.fit)}>覆盖（铺满，裁剪边缘）</option>
-                            <option value="fill"${opt('fill', saved.fit)}>拉伸（拉伸填满）</option>
+                            <option value="contain"${opt('contain', saved.fit)}>包含</option>
+                            <option value="cover"${opt('cover', saved.fit)}>覆盖</option>
+                            <option value="fill"${opt('fill', saved.fit)}>拉伸</option>
                         </select>
                     </label>
                 </div>
@@ -4134,21 +4091,18 @@ self.onmessage = function (e) {
                             <option value="none"${opt('none', saved.smooth)}>关闭</option>
                         </select>
                     </label>
-                    <span style="font-size:11px;color:var(--dgut-outline);">缩小较多时选「高质量」，可减轻毛糙</span>
                 </div>
             </div>
             <div class="dgut-card">
-                <div class="dgut-section-title">图像处理 <span style="font-weight:400;font-size:11px;color:var(--dgut-on-surface-variant);">（Web Worker 多线程）</span></div>
+                <div class="dgut-section-title">图像处理</div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label"><input type="checkbox" id="dgut-img-sharpen" ${saved.sharpen ? 'checked' : ''}> 锐化</label>
                     <label class="dgut-label">强度
                         <input type="number" id="dgut-img-sharpen-amt" class="dgut-input" value="${saved.sharpenAmount}" min="0.1" max="3" step="0.1" style="width:60px;padding:4px 6px;">
                     </label>
-                    <span style="font-size:11px;color:var(--dgut-outline);">照片压缩后若显毛糙，关掉锐化试试</span>
                 </div>
                 <div class="dgut-row dgut-row--mb">
-                    <label class="dgut-label"><input type="checkbox" id="dgut-img-bw" ${saved.bw ? 'checked' : ''}> 黑白（转灰度）</label>
-                    <span style="font-size:11px;color:var(--dgut-outline);">保留明暗层次，不是二值化</span>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-img-bw" ${saved.bw ? 'checked' : ''}> 黑白</label>
                 </div>
                 <div class="dgut-row">
                     <label class="dgut-label"><input type="checkbox" id="dgut-img-eq" ${saved.eq ? 'checked' : ''}> 亮度均匀</label>
@@ -4168,7 +4122,7 @@ self.onmessage = function (e) {
                 </div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">压缩到目标大小
-                        <input type="number" id="dgut-img-target" class="dgut-input" placeholder="留空=不限" min="0" value="${saved.targetSizeKB || ''}" style="width:90px;padding:4px 6px;"> KB
+                        <input type="number" id="dgut-img-target" class="dgut-input" placeholder="KB" min="0" value="${saved.targetSizeKB || ''}" style="width:90px;padding:4px 6px;"> KB
                     </label>
                     <label class="dgut-label">
                         <input type="checkbox" id="dgut-img-allow-resize" ${saved.allowResize ? 'checked' : ''}> 允许降低分辨率
@@ -4177,12 +4131,11 @@ self.onmessage = function (e) {
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">输出质量
                         <input type="number" id="dgut-img-quality" class="dgut-input" value="${saved.quality}" min="1" max="100" style="width:60px;padding:4px 6px;"> %
-                        <span id="dgut-img-quality-note" style="font-size:11px;color:var(--dgut-outline);"></span>
                     </label>
                 </div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">增大到
-                        <input type="number" id="dgut-img-inflate" class="dgut-input" placeholder="留空=不增大" min="0" value="${saved.inflateKB || ''}" style="width:90px;padding:4px 6px;"> KB
+                        <input type="number" id="dgut-img-inflate" class="dgut-input" placeholder="KB" min="0" value="${saved.inflateKB || ''}" style="width:90px;padding:4px 6px;"> KB
                     </label>
                     <label class="dgut-label">填充
                         <select id="dgut-img-inflate-mode" class="dgut-select" style="padding:5px 8px;">
@@ -4207,7 +4160,6 @@ self.onmessage = function (e) {
         const hEl = ac.querySelector('#dgut-img-h');
         const targetEl = ac.querySelector('#dgut-img-target');
         const qualityEl = ac.querySelector('#dgut-img-quality');
-        const qualityNoteEl = ac.querySelector('#dgut-img-quality-note');
         const setStatus = (msg, isErr) => { statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`; };
         const refreshVisibility = () => {
             const m = sizeModeEl.value;
@@ -4216,7 +4168,6 @@ self.onmessage = function (e) {
         const refreshOutputState = () => {
             const useTarget = Number(targetEl.value) > 0;
             qualityEl.disabled = useTarget;
-            qualityNoteEl.textContent = useTarget ? '（已设定目标大小，质量自动调节）' : '';
         };
         const syncFromWidth = () => {
             const preset = IMG_RATIO_PRESETS.find(p => p.id === ratioEl.value);
@@ -4259,7 +4210,7 @@ self.onmessage = function (e) {
                 c.drawImage(img, 0, 0);
                 if (!wEl.value) wEl.value = img.naturalWidth;
                 if (!hEl.value) hEl.value = img.naturalHeight;
-                setStatus('已载入，可调整参数后点击「预览效果」或「处理并下载」。');
+                setStatus('已载入');
             } catch (e) { gImgState = null; setStatus('读取失败：' + e.message, true); }
         });
         const doPreview = async () => {
@@ -4272,7 +4223,7 @@ self.onmessage = function (e) {
                 c.drawImage(canvas, 0, 0);
                 let msg;
                 if (targetBytes > 0 && !achieved) {
-                    msg = `已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
+                    msg = `无法压缩到 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}，可勾选「允许降低分辨率」。`;
                 } else if (inflated) {
                     msg = `输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}（已填充至目标大小）`;
                 } else {
@@ -4382,7 +4333,7 @@ self.onmessage = function (e) {
                 transition:background .15s, color .15s, border-color .15s;
             ">${label}</button>`;
         };
-        ac.innerHTML = actionHeader(ACTION_TITLES.appearance, '亮/暗/跟随系统 + 主体色') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.appearance) + `
             <div class="dgut-card">
                 <div class="dgut-section-title">主题模式</div>
                 <div class="dgut-row">
@@ -4740,7 +4691,7 @@ self.onmessage = function (e) {
 
     function renderDetailView(ac) {
         let activeTab = GM_getValue(DETAIL_TAB_KEY, 'about');
-        ac.innerHTML = actionHeader(ACTION_TITLES.detail, '软件简介与错误代码列表') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.detail) + `
             <div class="dgut-tab-bar">
                 <button class="dgut-tab-btn ${activeTab === 'about' ? 'active' : ''}" data-tab="about">软件简介</button>
                 <button class="dgut-tab-btn ${activeTab === 'errors' ? 'active' : ''}" data-tab="errors">错误代码列表</button>
@@ -4750,7 +4701,6 @@ self.onmessage = function (e) {
         const code = (s) => `<code>${s}</code>`;
 
         const renderAbout = () => {
-            const ifr = detectIframe();
             contentEl.innerHTML = `
                 <div class="dgut-card">
                     <div style="display:flex;align-items:center;gap:12px;">
@@ -4759,15 +4709,6 @@ self.onmessage = function (e) {
                             <div style="font-size:16px;font-weight:700;">优学院助手 + 文档工具</div>
                             <div style="font-size:12px;color:var(--dgut-on-surface-variant);">${ABOUT_VERSION}</div>
                         </div>
-                    </div>
-                </div>
-                <div class="dgut-card">
-                    <div class="dgut-section-title">运行环境</div>
-                    <div style="font-size:12px;line-height:2;">
-                        <div>域名：<b>${escapeHtml(location.hostname)}</b></div>
-                        <div>顶层窗口：<b>${ifr.isTop ? '是' : '否（iframe）'}</b></div>
-                        <div>本帧 video：<b>${ifr.hasVideo ? '有' : '无'}</b> · 课件VM：<b>${ifr.hasVM ? '有' : '无'}</b> · ko：<b>${ifr.hasKo ? '有' : '无'}</b></div>
-                        <div>Web Worker：<b>${typeof Worker === 'function' ? '可用（图片处理多线程）' : '不可用'}</b></div>
                     </div>
                 </div>
                 <div class="dgut-card">
@@ -4781,25 +4722,12 @@ self.onmessage = function (e) {
                         <label class="dgut-label"><input type="checkbox" id="dgut-auto-update" ${updateCheckOn() ? 'checked' : ''}> 自动检查更新（默认关闭）</label>
                         <button id="dgut-check-update" class="dgut-btn" style="margin-left:8px;">立即检查</button>
                         <button id="dgut-do-update" class="dgut-btn" style="margin-left:8px;display:none;">立即更新</button>
-                        <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。本脚本<strong>不会在后台自动替换</strong>自己：点「立即检查」看有没有新版本，发现新版后点「立即更新」打开油猴安装页，确认后覆盖安装。</div>
+                        <div id="dgut-update-result" style="font-size:12px;color:var(--dgut-on-surface-variant);line-height:1.7;margin-top:6px;">未开启自动检查。</div>
                         <div style="font-size:11px;color:var(--dgut-on-surface-variant);line-height:1.9;margin-top:4px;">
-                            手动更新入口（油猴只识别 <code>.user.js</code> 结尾的链接）：
+                            手动更新：
                             <a class="dgut-link" href="${UPDATE_SOURCES[1].url}" target="_blank" rel="noopener noreferrer">jsDelivr</a>
                             · <a class="dgut-link" href="${UPDATE_SOURCES[0].url}" target="_blank" rel="noopener noreferrer">GitHub raw</a>
                         </div>
-                    </div>
-                </div>
-                <div class="dgut-card">
-                    <div class="dgut-section-title">功能一览</div>
-                    <div style="font-size:13px;line-height:2;">
-                        · <b>近七天日程</b>：只读优学院「活动日历」接口，平铺显示近 7 天事项；勾选后置灰，过期自动清理，无提醒<br>
-                        · <b>刷课助手</b>：视频倍速守卫、自动答题、自动翻页、题库收集<br>
-                        · <b>作业互评</b>：读取互评接口，汇总与筛选记录<br>
-                        · <b>求是读书</b>：课件阅读时长统计与自动翻页<br>
-                        · <b>文档工具</b>：Markdown 转 Word / PDF（PDF 直出下载）+ 手绘电子签名<br>
-                        · <b>Word 转 PDF</b>：本地解析 .docx 并导出 PDF / .doc<br>
-                        · <b>图片工具</b>：缩放、压缩、增大文件、锐化 / 黑白 / 亮度均匀<br>
-                        · <b>外观设置</b>：亮/暗/跟随系统主题 + 主体色
                     </div>
                 </div>`;
             renderGitHubInfo(contentEl.querySelector('#dgut-gh-info'));
@@ -4810,7 +4738,7 @@ self.onmessage = function (e) {
             const upBtn = contentEl.querySelector('#dgut-check-update');
             const upGo = contentEl.querySelector('#dgut-do-update');
             const upRes = () => contentEl.querySelector('#dgut-update-result');
-            const IDLE_TEXT = '未开启自动检查。本脚本不会在后台自动替换自己：点「立即检查」看有没有新版本，发现新版后点「立即更新」打开油猴安装页，确认后覆盖安装。';
+            const IDLE_TEXT = '未开启自动检查。';
             const runCheck = async (manual) => {
                 if (!manual && !updateCheckOn()) return;
                 const el = upRes();
@@ -4878,16 +4806,9 @@ self.onmessage = function (e) {
                 </div>`).join('');
 
             contentEl.innerHTML = `
-                <div class="dgut-hint">
-                    <b>编码规则</b>：四位数字 <code>M T N N</code><br>
-                    · <b>M（千位）</b> 模块：1=网络/认证（历史签到段） 2=刷课 3=互评 4=读书 5=文档 6=Word转PDF 7=图片 8=通用/框架<br>
-                    · <b>T（百位）</b> 类型：0=未知 1=请求 2=处理 3=认证 4=依赖缺失 5=参数 6=用户操作<br>
-                    · <b>NN（十/个位）</b> 具体编号
-                </div>
                 <div class="dgut-card">
-                    <div class="dgut-section-title">本次自检（同步阶段）</div>
+                    <div class="dgut-section-title">本次自检</div>
                     <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;overflow:hidden;">${scRows}</div>
-                    <div style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:8px;">异步阶段（Token 检查）会输出到控制台。可打开 F12 查看。</div>
                 </div>
                 <div class="dgut-card">
                     <div class="dgut-section-title">错误代码列表</div>
@@ -5335,9 +5256,7 @@ self.onmessage = function (e) {
             } catch (e) {}
         }
         try {
-            showStatus(next
-                ? '悬浮面板靠边吸附已开启：靠边后只露 5px，鼠标靠近边缘自动滑出'
-                : '悬浮面板靠边吸附已关闭');
+            showStatus(next ? '靠边吸附：开' : '靠边吸附：关');
         } catch (e) {}
     }
 
@@ -5424,7 +5343,7 @@ self.onmessage = function (e) {
         document.getElementById('dgut-mini-panel')?.remove();
         createMiniPanel();
         if (GM_getValue(PANEL_OPEN_KEY, false)) createPanel();
-        showToastCard(`${KAO.ok} 布局已重置`, '面板位置、大小与缩放已恢复默认（右下角 780×620、100%）。', '', 4000);
+        showToastCard(`${KAO.ok} 布局已重置`, '已恢复默认位置。', '', 4000);
     }
 
     function resetPanelSize() {
@@ -5441,7 +5360,7 @@ self.onmessage = function (e) {
         p.style.right = 'auto'; p.style.bottom = 'auto';
         panelClampBox(p);
         savePanelState(panelStateOf(p));
-        showToastCard('面板大小已重置', `恢复默认 ${PANEL_DEFAULT_W}×${PANEL_DEFAULT_H}、缩放 100%。`, '', 4000);
+        showToastCard('面板大小已重置', '已恢复默认大小。', '', 4000);
     }
 
     function init() {
