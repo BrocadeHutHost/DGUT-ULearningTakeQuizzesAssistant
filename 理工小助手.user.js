@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.12.1
+// @version      5.12.2
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -3608,12 +3608,10 @@ function sharpen(data, width, height, amount) {
     const center = 1 + 4 * a;
     return applyConvolution(data, width, height, [[0, -a, 0], [-a, center, -a], [0, -a, 0]], 1, 0);
 }
-function blackwhite(data, width, height, threshold) {
-    const t = Math.max(0, Math.min(255, Number(threshold) || 128));
+function grayscale(data, width, height) {
     const out = new Uint8ClampedArray(data.length);
     for (let i = 0; i < data.length; i += 4) {
-        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        const v = lum >= t ? 255 : 0;
+        const v = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
         out[i] = out[i + 1] = out[i + 2] = v;
         out[i + 3] = data[i + 3];
     }
@@ -3653,7 +3651,7 @@ self.onmessage = function (e) {
     try {
         let data = new Uint8ClampedArray(d.buffer);
         if (params.sharpen) data = sharpen(data, width, height, params.sharpenAmount);
-        if (params.bw)      data = blackwhite(data, width, height, params.bwThreshold);
+        if (params.bw)      data = grayscale(data, width, height);
         if (params.eq)      data = equalize(data, width, height);
         self.postMessage({ id: id, ok: true, buffer: data.buffer }, [data.buffer]);
     } catch (err) {
@@ -3719,8 +3717,7 @@ self.onmessage = function (e) {
                 const imgData = ctx.getImageData(0, 0, w, h);
                 const buf = await imgWorkerRun(imgData.data.buffer, w, h, {
                     sharpen: cfg.sharpen, sharpenAmount: cfg.sharpenAmount,
-                    bw: cfg.bw, bwThreshold: cfg.bwThreshold,
-                    eq: cfg.eq
+                    bw: cfg.bw, eq: cfg.eq
                 });
                 ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
                 return;
@@ -3731,7 +3728,7 @@ self.onmessage = function (e) {
         // 主线程兜底（注意 buffer 可能已被 transfer 清空，需重新取）
         let d = ctx.getImageData(0, 0, w, h);
         if (cfg.sharpen) d = imgApplySharpen(d, cfg.sharpenAmount);
-        if (cfg.bw) d = imgApplyBlackWhite(d, cfg.bwThreshold);
+        if (cfg.bw) d = imgApplyBlackWhite(d);
         if (cfg.eq) d = imgApplyHistEqualize(d);
         ctx.putImageData(d, 0, 0);
     }
@@ -3768,13 +3765,12 @@ self.onmessage = function (e) {
         const center = 1 + 4 * a;
         return imgApplyConvolution(imageData, [[0, -a, 0], [-a, center, -a], [0, -a, 0]], 1, 0);
     }
-    function imgApplyBlackWhite(imageData, threshold = 128) {
-        const t = Math.max(0, Math.min(255, Number(threshold) || 128));
+    function imgApplyBlackWhite(imageData) {
+        /* 「黑白」= 转灰度图（保留明暗层次），不是二值化 */
         const { width, height, data } = imageData;
         const out = new Uint8ClampedArray(data.length);
         for (let i = 0; i < data.length; i += 4) {
-            const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-            const v = lum >= t ? 255 : 0;
+            const v = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
             out[i] = out[i + 1] = out[i + 2] = v;
             out[i + 3] = data[i + 3];
         }
@@ -3990,7 +3986,7 @@ self.onmessage = function (e) {
             sizeMode: 'none', percent: 100, targetW: 0, targetH: 0,
             ratioPreset: 'orig', fit: 'contain', format: 'keep', quality: 92,
             targetSizeKB: 0, allowResize: false, inflateKB: 0, inflateMode: 'random',
-            sharpen: false, sharpenAmount: 1, bw: false, bwThreshold: 128, eq: false, smooth: 'high'
+            sharpen: false, sharpenAmount: 1, bw: false, eq: false, smooth: 'high'
         };
         return Object.assign(d, GM_getValue(IMG_CFG_KEY, {}) || {});
     }
@@ -4014,7 +4010,6 @@ self.onmessage = function (e) {
             sharpen: !!q('#dgut-img-sharpen')?.checked,
             sharpenAmount: num('#dgut-img-sharpen-amt', 1),
             bw: !!q('#dgut-img-bw')?.checked,
-            bwThreshold: num('#dgut-img-bw-thresh', 128),
             eq: !!q('#dgut-img-eq')?.checked,
             smooth: q('#dgut-img-smooth')?.value || 'high'
         };
@@ -4040,12 +4035,27 @@ self.onmessage = function (e) {
                 if (mime === 'image/jpg') mime = 'image/jpeg';
         }
         let blob, achieved = true, targetBytes = 0;
+        let capped = false;
         if (cfg.targetSizeKB > 0) {
             targetBytes = cfg.targetSizeKB * 1024;
             const r = await imgCompressToTargetSize(canvas, targetBytes, mime, cfg.allowResize, cfg.smooth);
             blob = r.blob; achieved = r.achieved;
         } else {
             blob = await imgCanvasToBlob(canvas, mime, cfg.quality);
+            /* 处理（锐化/灰度/亮度均匀/缩放）后重新编码可能比原图大：
+               JPEG/WebP 时自动降一点质量，尽量不超过原图大小；PNG 无损无法这样压。 */
+            const origSize = (st.file && st.file.size) || 0;
+            const changed = cfg.sharpen || cfg.bw || cfg.eq || canvas.width !== st.img.naturalWidth || canvas.height !== st.img.naturalHeight;
+            if (origSize > 0 && blob.size > origSize && changed && /^image\/(jpeg|webp)$/.test(mime)) {
+                let q = Math.min(0.95, Number(cfg.quality) || 0.92);
+                let best = blob;
+                for (let i = 0; i < 10 && best.size > origSize && q > 0.6; i++) {
+                    q = Math.max(0.6, q - 0.06);
+                    const b = await imgCanvasToBlob(canvas, mime, q);
+                    if (b.size < best.size) best = b;
+                }
+                if (best.size < blob.size) { blob = best; capped = true; }
+            }
         }
         if (!blob) throw new Error(errFull(ERR.IMG_ENCODE_FAIL));
         let inflated = false;
@@ -4053,7 +4063,7 @@ self.onmessage = function (e) {
             blob = await imgInflateToSize(blob, cfg.inflateKB * 1024, cfg.inflateMode);
             inflated = true;
         }
-        return { canvas, blob, mime, inflated, achieved, targetBytes };
+        return { canvas, blob, mime, inflated, achieved, targetBytes, capped };
     }
     function imgExtFromMime(mime) {
         if (mime === 'image/jpeg') return 'jpg';
@@ -4066,14 +4076,14 @@ self.onmessage = function (e) {
         const saved = imgLoadCfg();
         const ratioOpts = IMG_RATIO_PRESETS.map(p => `<option value="${p.id}" ${p.id === saved.ratioPreset ? 'selected' : ''}>${p.label}</option>`).join('');
         const opt = (v, cur) => v === cur ? ' selected' : '';
-        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 黑白 / 亮度均匀（像素处理多线程）') + `
+        ac.innerHTML = actionHeader(ACTION_TITLES.imagetool, '缩放 · 压缩到指定大小 · 增大文件 · 高质量平滑 / 锐化 / 灰度 / 亮度均匀（像素处理多线程）') + `
             <div class="dgut-hint">
                 <b>说明</b><br>
                 · 所有处理均在浏览器本地完成，图片不上传服务器。<br>
-                · <b>像素滤镜（锐化/黑白/亮度均匀）默认在 Web Worker 中执行</b>，不阻塞主线程；不可用时自动回退主线程。<br>
+                · <b>像素滤镜（锐化/灰度/亮度均匀）默认在 Web Worker 中执行</b>，不阻塞主线程；不可用时自动回退主线程。<br>
                 · <b>平滑</b>除极限情况下建议保持「高质量」。<br>
                 · 压缩：填了「目标大小」时，脚本自动调节质量逼近该大小；未填时，使用「输出质量」。<br>
-                · 目标大小过小时，默认不降低分辨率；勾选「允许降低分辨率」可进一步压缩。<br>
+                · 锐化会增加画面细节，JPEG/WebP 默认会自动压低一点质量，尽量不超过原图大小。<br>
                 · 增大：将图片增大到指定大小，注意不是超分。
             </div>
             <div class="dgut-card">
@@ -4137,10 +4147,8 @@ self.onmessage = function (e) {
                     <span style="font-size:11px;color:var(--dgut-outline);">照片压缩后若显毛糙，关掉锐化试试</span>
                 </div>
                 <div class="dgut-row dgut-row--mb">
-                    <label class="dgut-label"><input type="checkbox" id="dgut-img-bw" ${saved.bw ? 'checked' : ''}> 黑白</label>
-                    <label class="dgut-label">阈值
-                        <input type="number" id="dgut-img-bw-thresh" class="dgut-input" value="${saved.bwThreshold}" min="0" max="255" style="width:60px;padding:4px 6px;">
-                    </label>
+                    <label class="dgut-label"><input type="checkbox" id="dgut-img-bw" ${saved.bw ? 'checked' : ''}> 黑白（转灰度）</label>
+                    <span style="font-size:11px;color:var(--dgut-outline);">保留明暗层次，不是二值化</span>
                 </div>
                 <div class="dgut-row">
                     <label class="dgut-label"><input type="checkbox" id="dgut-img-eq" ${saved.eq ? 'checked' : ''}> 亮度均匀</label>
@@ -4257,21 +4265,22 @@ self.onmessage = function (e) {
         const doPreview = async () => {
             try {
                 setStatus('处理中…');
-                const { canvas, blob, inflated, achieved, targetBytes } = await imgRunPipeline(ac);
+                const { canvas, blob, inflated, achieved, targetBytes, capped } = await imgRunPipeline(ac);
                 canvasEl.width = canvas.width; canvasEl.height = canvas.height;
                 const c = canvasEl.getContext('2d');
                 c.clearRect(0, 0, canvas.width, canvas.height);
                 c.drawImage(canvas, 0, 0);
                 let msg;
                 if (targetBytes > 0 && !achieved) {
-                    msg = `? 已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
+                    msg = `已用最低质量，无法压缩到目标大小 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}。如需更小请勾选"允许降低分辨率"。`;
                 } else if (inflated) {
-                    msg = `? 输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}（已填充至目标大小）`;
+                    msg = `输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}（已填充至目标大小）`;
                 } else {
-                    msg = `? 输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}`;
+                    msg = `输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}`;
                 }
+                if (capped) msg += '（已自动调整质量，尽量不超过原图大小）';
                 setStatus(msg);
-﻿                return { canvas, blob };
+                return { canvas, blob };
             } catch (e) { setStatus('处理失败：' + e.message, true); return null; }
         };
         ac.querySelector('#dgut-img-run').onclick = doPreview;
@@ -4643,7 +4652,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.12.1';
+    const ABOUT_VERSION = 'v5.12.2';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
