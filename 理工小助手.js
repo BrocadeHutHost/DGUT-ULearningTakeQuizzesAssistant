@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.0
+// @version      5.13.1
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -914,7 +914,7 @@
         }
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
-                method, url, anonymous: true, headers, data, timeout: 15000,
+                method, url, anonymous: !opts.withCredentials, headers, data, timeout: 15000,
                 onload: (res) => {
                     const text = String(res.responseText == null ? '' : res.responseText).replace(/^\uFEFF/, '').trim();
                     let parsed = null;
@@ -932,7 +932,12 @@
                         const why = parsed ? apiMessage(parsed) : text.slice(0, 60);
                         return reject(new Error(errFull(ERR.API_AUTH_FAIL, 'HTTP ' + res.status + (why ? '：' + why : ''))));
                     }
-                    if (res.status >= 400) return reject(new Error(errFull(ERR.API_HTTP_ERR, 'HTTP ' + res.status)));
+                    /* 其它 4xx/5xx：旧实现只报「HTTP 400」，看不到服务端原因，
+                       排查时只能瞎猜（考试接口那次就是这样）。现在把响应体前 120 字带出来。 */
+                    if (res.status >= 400) {
+                        const why = parsed ? apiMessage(parsed) : text.slice(0, 120).replace(/\s+/g, ' ');
+                        return reject(new Error(errFull(ERR.API_HTTP_ERR, 'HTTP ' + res.status + (why ? '：' + why : ''))));
+                    }
                     if (!text) return resolve({});                 // 空响应体按空对象处理，不再当解析失败
                     if (parsed === null) return reject(new Error(errFull(ERR.API_PARSE_FAIL, text.slice(0, 80))));
                     return resolve(parsed);
@@ -968,14 +973,21 @@
     const SCHED_CACHE_MAX = 200;
     /* 考试**不在**活动日历接口里（activitycalendar 只返回作业/讨论/直播等），
        要按「课程 → 考试列表」单独取（2026-10 从站点前端代码核实）：
-         · 新版考试：GET https://utestapi.dgut.edu.cn/exams/student?ocId=<开课id>&pn=1&ps=N
-         · 旧版考试：GET {API_HOST}/courseapi/exams/student?ocId=<开课id>&keyword=&pn=1&ps=N
-       学生视图返回 { total, examList: [{ examId, title, startTime, endTime, ... }] }。
-       两套接口都试一次，先把有数据的那个记住，后续课程直接复用，避免每门课都探两遍。 */
-    const SCHED_EXAM_UTEST_BASE = 'https://utestapi.dgut.edu.cn';
-    const SCHED_EXAM_LEGACY_BASE = API_HOST + '/courseapi';
+         · 新版考试：GET https://utestapi.dgut.edu.cn/exams/student?ocId=<开课id>&pn=&ps=
+         · 旧版考试：GET https://courseapi.dgut.edu.cn/exams/student?ocId=<开课id>&keyword=&pn=&ps=
+         · 旧版兜底：GET {API_HOST}/courseapi/exams/student?...（lms 代理）
+       站点 init.js 里的 $.ajaxSetup 会给**所有**业务请求额外加 `Authorization` 和
+       `version: 1` 两个头，考试接口本身是带 cookie 的请求；v5.13.0 只带了 Authorization，
+       实测被服务端以 HTTP 400 拒绝，v5.13.1 补上 version 头 + cookie，并把 ps 降到站点
+       默认的 20（分页拉取）。学生视图返回 { total, examList: [{ examId, title, startTime, endTime, ... }] }。 */
+    const SCHED_EXAM_BASES = [
+        'https://utestapi.dgut.edu.cn',
+        'https://courseapi.dgut.edu.cn',
+        API_HOST + '/courseapi',
+    ];
     const SCHED_EXAM_COURSE_MAX = 30;          // 最多遍历多少门课（防止课程特别多时请求爆炸）
-    const SCHED_EXAM_PAGE_SIZE = 100;
+    const SCHED_EXAM_PAGE_SIZE = 20;           // 与站点考试页一致（pageSize=20），服务端可能有上限校验
+    const SCHED_EXAM_PAGE_MAX = 5;
     const SCHED_EXAM_WINDOW_DAYS = 120;        // 未来考试最多看多远（活动仍是 7 天）
     const SCHED_EXAM_REFRESH_MS = 30 * 60 * 1000;
     let gSchedItems = null, gSchedFetchedAt = 0, gSchedLoading = false, gSchedError = '', gSchedTimer = null;
@@ -1128,29 +1140,54 @@
         out.sort((a, b) => a.sortT - b.sortT);
         return out;
     }
-    function schedExamUrl(base, ocId) {
-        const q = 'ocId=' + encodeURIComponent(ocId) + '&pn=1&ps=' + SCHED_EXAM_PAGE_SIZE;
-        return base === SCHED_EXAM_LEGACY_BASE
-            ? base + '/exams/student?' + q + '&keyword='
-            : base + '/exams/student?' + q;
+    function schedExamHost(base) { return String(base).replace(/^https?:\/\//, ''); }
+    function schedExamUrl(base, ocId, pn) {
+        const q = 'ocId=' + encodeURIComponent(ocId) + '&pn=' + pn + '&ps=' + SCHED_EXAM_PAGE_SIZE;
+        return base.indexOf('utestapi') >= 0
+            ? base + '/exams/student?' + q
+            : base + '/exams/student?' + q + '&keyword=';
     }
-    /** 取一门课的考试列表；第一次调用时两套接口都探一遍，有数据的那个会被记住 */
+    /* 考试接口的请求：站点 init.js 的 $.ajaxSetup 会给所有业务请求加
+       `Authorization` + `version: 1` 两个头，并且考试接口本身是带 cookie 的请求。
+       v5.13.0 只带了 Authorization，服务端直接 400；这里补齐 version + cookie。 */
+    function schedExamRequest(base, ocId, pn) {
+        return gmFetchEx(schedExamUrl(base, ocId, pn), {
+            withCredentials: true,
+            headers: { 'version': '1' },
+        });
+    }
+    /** 分页取一门课的全部考试（ps 与站点一致取 20，最多 5 页） */
+    async function schedExamPages(base, ocId) {
+        let all = [], total = 0, pn = 1;
+        while (pn <= SCHED_EXAM_PAGE_MAX) {
+            const res = await schedExamRequest(base, ocId, pn);
+            const list = schedExamListOf(res);
+            if (!list) throw new Error('返回结构异常：' + String(apiRaw(res)).slice(0, 80));
+            total = Number(res && (res.total != null ? res.total : (res.result && res.result.total))) || 0;
+            all = all.concat(list);
+            if (!list.length || list.length < SCHED_EXAM_PAGE_SIZE || (total && all.length >= total)) break;
+            pn++;
+        }
+        return all;
+    }
+    /** 取一门课的考试列表；第一次调用时把所有候选 base 都探一遍，有数据的那个会被记住 */
     async function schedFetchExamList(ocId) {
-        const bases = gSchedExamBase ? [gSchedExamBase] : [SCHED_EXAM_UTEST_BASE, SCHED_EXAM_LEGACY_BASE];
-        let bestBase = '', bestList = null, lastErr = null;
-        for (const base of bases) {
+        if (gSchedExamBase) return schedExamPages(gSchedExamBase, ocId);
+        const errs = [];
+        let bestBase = '', bestList = null;
+        for (const base of SCHED_EXAM_BASES) {
             try {
-                const res = await gmFetchEx(schedExamUrl(base, ocId));
-                const list = schedExamListOf(res);
-                if (!list) { lastErr = new Error('考试接口返回结构异常：' + String(apiRaw(res)).slice(0, 80)); continue; }
-                if (!bestList) { bestList = list; bestBase = base; }
-                /* 探测阶段：某个接口返回空列表时继续试下一个，避免「空数组也是成功」提前锁定错接口 */
-                if (!gSchedExamBase && list.length) { bestBase = base; bestList = list; break; }
-            } catch (e) { lastErr = e; }
+                const list = await schedExamPages(base, ocId);
+                if (!bestList) { bestBase = base; bestList = list; }
+                /* 探测阶段：某个接口返回空列表时继续试下一个，
+                   避免「空数组也是成功」把没数据的接口提前锁定 */
+                if (list.length) { bestBase = base; bestList = list; break; }
+            } catch (e) {
+                errs.push(schedExamHost(base) + '（' + ((e && e.message) || e) + '）');
+            }
         }
         if (bestList) { gSchedExamBase = bestBase; return bestList; }
-        if (lastErr) throw lastErr;
-        return [];
+        throw new Error(errs.length ? errs.join('；') : '没有可用的考试接口');
     }
     /** 拉取「我所有课程的考试」：课程列表 → 逐门课取考试 → 归一化 */
     async function schedFetchExams() {
@@ -4804,7 +4841,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.0';
+    const ABOUT_VERSION = 'v5.13.1';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
