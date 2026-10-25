@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.11.1
+// @version      5.12.0
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -2771,7 +2771,10 @@
     const READ_MIN_SEC = 4 * 3600 + 10;
     const READ_NAV_SEC = 3;
     const READ_SAVE_INTERVAL = 30;
+    const READ_SERVER_POLL_SEC = 5;          // 阅读中每 5 秒刷新一次服务端时长
+    const READ_VIEW_REFRESH_MS = 30 * 1000;  // 面板停留时每 30 秒刷新显示
     let gRead = null;
+    let gRdViewTimer = null;
     function rdCfg() {
         try {
             /* 一次性迁移（v5.9.1）：旧实现默认「开」、连保存间隔都会写 readerAutoStart:true，
@@ -2816,6 +2819,57 @@
         });
         return result;
     }
+    /** 当前书的服务端累计秒数：null=取不到（不在课件页/视图模型未就绪），0=服务端暂无记录 */
+    function rdServerTotal(key) {
+        const st = rdServerTimes();
+        if (!st) return null;
+        const v = st[key || rdBookKey()];
+        return (v === undefined || v === null) ? 0 : Math.max(0, Math.floor(Number(v) || 0));
+    }
+    /** 切书/过章节门槛：以服务端时长为准；服务端暂无记录时才退回本地累计 */
+    function rdGateSec() {
+        const key = gRead ? gRead.bookKey : rdBookKey();
+        const s = rdServerTotal(key);
+        const local = gRead ? gRead.total : rdBookTime(key);
+        return (s !== null && s > 0) ? s : local;
+    }
+    /** 上方大号时间 = 服务端时长（取不到时退回本地）；下方小字同时显示服务端/本地，便于对齐 */
+    function rdRenderTimes() {
+        const key = gRead ? gRead.bookKey : rdBookKey();
+        const local = gRead ? gRead.total : rdBookTime(key);
+        const s = rdServerTotal(key);
+        const tEl = document.getElementById('dgut-rd-timer');
+        if (tEl) tEl.textContent = rdFmt((s !== null && s > 0) ? s : local);
+        const sEl = document.getElementById('dgut-rd-server');
+        if (!sEl) return;
+        if (s === null) sEl.textContent = `服务端: 获取失败 · 本地 ${rdFmt(local)}`;
+        else if (s === 0) sEl.textContent = `服务端: 暂无记录 · 本地 ${rdFmt(local)}`;
+        else sEl.textContent = `服务端 ${rdFmt(s)} · 本地 ${rdFmt(local)}${s < local ? '（切换按服务端判定）' : ''}`;
+    }
+    /** 刷新服务端时长；alignUp=true 时把本地落后部分补到服务端值（只增不减，避免误删阅读进度） */
+    function rdRefreshServer(alignUp) {
+        const key = gRead ? gRead.bookKey : rdBookKey();
+        const s = rdServerTotal(key);
+        if (s === null) { rdRenderTimes(); return null; }
+        if (alignUp && s > 0) {
+            const local = gRead ? gRead.total : rdBookTime(key);
+            if (s > local) {
+                rdSetBookTime(key, s);
+                if (gRead) { gRead.total = s; gRead.accumulated = s; gRead.sessionStart = Date.now(); gRead.lastSave = s; }
+            }
+        }
+        if (gRead) { gRead.serverTotal = s; gRead.lastServerAt = Date.now(); }
+        rdRenderTimes();
+        return s;
+    }
+    function rdStopViewTimer() { if (gRdViewTimer) { clearInterval(gRdViewTimer); gRdViewTimer = null; } }
+    function rdStartViewTimer() {
+        rdStopViewTimer();
+        gRdViewTimer = setInterval(() => {
+            if (!document.getElementById('dgut-rd-timer')) { rdStopViewTimer(); return; }   // 离开读书视图就停
+            rdRefreshServer(true);
+        }, READ_VIEW_REFRESH_MS);
+    }
     function rdFlatList(vm) {
         const course = rdUnwrap(vm.course); const chapters = course && rdUnwrap(course.chapters); if (!chapters) return [];
         const out = [];
@@ -2837,7 +2891,7 @@
         if (r.width === 0 && r.height === 0) return false;
         const btns = modal.querySelectorAll('.stat-next .btn-hollow');
         if (!btns.length) return false;
-        if (gRead.total < READ_MIN_SEC) { btns[0].click(); gRead.pageStart = Date.now(); }
+        if (rdGateSec() < READ_MIN_SEC) { btns[0].click(); gRead.pageStart = Date.now(); }
         else if (btns.length > 1) { btns[1].click(); gRead.curPageId = null; gRead.pageStart = Date.now(); }
         else { btns[0].click(); gRead.pageStart = Date.now(); }
         return true;
@@ -2854,12 +2908,15 @@
         if (modal && pgVisible(modal)) { const b = modal.querySelector('.btn-submit'); if (b && pgVisible(b)) b.click(); return; }
         if (rdSolveChapterModal()) return;
         const key = rdBookKey();
-        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; }
+        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; gRead.serverTotal = null; gRead.lastServerAt = 0; }
+        /* 阅读中定期刷新服务端时长；本地累计落后时自动补到服务端值 */
+        if (Date.now() - (gRead.lastServerAt || 0) >= READ_SERVER_POLL_SEC * 1000) rdRefreshServer(true);
         if (vm && vm.currentPage) {
             const list = rdFlatList(vm);
             const pid = rdPageId(vm.currentPage());
             if (pid && pid !== gRead.curPageId) { gRead.curPageId = pid; gRead.pageStart = Date.now(); }
-            if (gRead.total >= READ_MIN_SEC) {
+            /* 是否已满 4h10m 以服务端阅读时长为准（服务端暂无记录才用本地） */
+            if ((gRead.serverTotal > 0 ? gRead.serverTotal : gRead.total) >= READ_MIN_SEC) {
                 const dwellOk = gRead.curPageId && Date.now() - gRead.pageStart >= READ_NAV_SEC * 1000;
                 /* 修复「连着翻页、跳过中间内容」（与刷课跳过中间视频同一类 bug）：
                    goNextPage() 之后 currentPage 可能要过一会儿才更新，而旧实现每
@@ -2890,10 +2947,7 @@
         if (!gRead) return;
         gRead.total = gRead.accumulated + Math.floor((Date.now() - gRead.sessionStart) / 1000);
         if (gRead.total - gRead.lastSave >= READ_SAVE_INTERVAL) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.lastSave = gRead.total; }
-        const tEl = document.getElementById('dgut-rd-timer');
-        if (tEl) tEl.textContent = rdFmt(gRead.total);
-        const sEl = document.getElementById('dgut-rd-server');
-        if (sEl) { const st = rdServerTimes(); sEl.textContent = st && st[gRead.bookKey] ? '服务端: ' + rdFmt(st[gRead.bookKey]) : (st ? '服务端: 暂无记录' : '服务端: 获取失败'); }
+        rdRenderTimes();
     }
     function rdStart() {
         if (gRead && gRead.running) return;
@@ -2904,11 +2958,12 @@
             return;
         }
         const key = rdBookKey();
-        gRead = { running: true, timer: null, bookKey: key, accumulated: rdBookTime(key), sessionStart: Date.now(), lastSave: rdBookTime(key), total: rdBookTime(key), curPageId: null, pageStart: Date.now(), lastAdvancePageId: null, lastAdvanceAt: 0, stuckWarned: false };
+        gRead = { running: true, timer: null, bookKey: key, accumulated: rdBookTime(key), sessionStart: Date.now(), lastSave: rdBookTime(key), total: rdBookTime(key), curPageId: null, pageStart: Date.now(), lastAdvancePageId: null, lastAdvanceAt: 0, stuckWarned: false, serverTotal: null, lastServerAt: 0 };
         if (vm.currentPage) gRead.curPageId = rdPageId(vm.currentPage());
         gRead.timer = setInterval(rdTick, 1000);
         rdSaveCfg({ readerAutoStart: true });
         rdSyncReader();
+        rdRefreshServer(true);
         showStatus('求是读书：开始');
     }
     function rdStop() {
@@ -2919,6 +2974,7 @@
         rdSaveCfg({ readerAutoStart: false });
         rdSyncReader();
         gRead = null;
+        rdRenderTimes();
         showStatus('求是读书：已暂停');
     }
     function renderReadView(ac) {
@@ -2928,15 +2984,15 @@
         const hasVm = !!vm;
         ac.innerHTML = actionHeader(ACTION_TITLES.read, '课件阅读时长统计与自动翻页') + `
             <div class="dgut-hint ${onPage ? 'dgut-hint--success' : 'dgut-hint--warn'}">
-                ${onPage ? '? 当前在课件页，可开始求是阅读。' : '请先在优学院打开求是读书课件页（地址含 <b>ua.dgut.edu.cn/learnCourse/learnCourse.html</b>）。'}
-                ${!hasVm ? '<br><span style="color:var(--dgut-error);">? 未检测到 koLearnCourseViewModel，启动后会空转。</span>' : ''}
+                ${onPage ? '当前在课件页，可开始求是阅读。' : '请先在优学院打开求是读书课件页（地址含 <b>ua.dgut.edu.cn/learnCourse/learnCourse.html</b>）。'}
+                ${!hasVm ? '<br><span style="color:var(--dgut-error);">未检测到 koLearnCourseViewModel，启动后会空转。</span>' : ''}
             </div>
             <div class="dgut-card">
                 <div style="text-align:center;font-size:30px;font-weight:700;color:var(--dgut-primary);font-family:Consolas,monospace;" id="dgut-rd-timer">${rdFmt(rdBookTime(rdBookKey()))}</div>
                 <div style="text-align:center;font-size:12px;color:var(--dgut-on-surface-variant);margin:4px 0 12px;" id="dgut-rd-server">服务端: --</div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">翻页间隔 <input type="number" id="dgut-rd-sec" class="dgut-input" value="${cfg.readerSec}" min="1" style="width:64px;padding:4px 6px;"> 秒/页</label>
-                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">目标 4h10m 后自动切书</span>
+                    <span style="color:var(--dgut-on-surface-variant);font-size:12px;">切换按服务端时长（满 4h10m）判定</span>
                 </div>
                 <div class="dgut-row dgut-row--end">
                     <button id="dgut-rd-save" class="dgut-btn">${icons.settings} 保存间隔</button>
@@ -2950,10 +3006,21 @@
         ac.querySelector('#dgut-rd-start').onclick = () => { rdSaveCfg({ readerSec: readSec() }); rdStart(); };
         ac.querySelector('#dgut-rd-stop').onclick = rdStop;
         ac.querySelector('#dgut-rd-sync').onclick = () => {
-            const key = rdBookKey(); const st = rdServerTimes();
-            if (st && st[key] && st[key] > rdBookTime(key)) { rdSetBookTime(key, st[key]); showStatus('已同步服务端时长'); }
-            else showStatus('服务端无更新');
+            const key = rdBookKey();
+            const st = rdServerTimes();
+            if (!st) { showStatus('服务端数据获取失败：请确认在课件页且视图模型已加载', true); return; }
+            const sv = Number(st[key]) || 0;
+            if (!sv) { showStatus('服务端暂无本书阅读记录'); return; }
+            const local = gRead ? gRead.total : rdBookTime(key);
+            const target = Math.max(local, sv);
+            rdSetBookTime(key, target);
+            if (gRead) { gRead.total = target; gRead.accumulated = target; gRead.sessionStart = Date.now(); gRead.lastSave = target; gRead.serverTotal = sv; gRead.lastServerAt = Date.now(); }
+            rdRenderTimes();
+            if (target > local) showStatus(`已对齐：本地 ${rdFmt(local)} → ${rdFmt(target)}（服务端 ${rdFmt(sv)}）`);
+            else showStatus(`本地 ${rdFmt(local)} / 服务端 ${rdFmt(sv)}，切书按服务端判定`);
         };
+        rdRefreshServer(false);   // 打开视图先拉一次服务端时长
+        rdStartViewTimer();       // 停留在视图期间每 30 秒自动刷新
     }
 
     /* ============================================================
@@ -4277,6 +4344,8 @@ self.onmessage = function (e) {
         if (!ac) return;
         /* 离开日程页就停掉它的「过期自动清理」定时器（它只在打开日程时运行） */
         if (name !== 'schedule' && typeof schedStopTicker === 'function') { try { schedStopTicker(); } catch (e) {} }
+        /* 离开读书页就停掉它的「服务端时长自动刷新」定时器 */
+        if (name !== 'read' && typeof rdStopViewTimer === 'function') { try { rdStopViewTimer(); } catch (e) {} }
         switch (name) {
             case 'schedule': renderScheduleView(ac); break;
             case 'course': renderCourseView(ac); break;
@@ -4584,7 +4653,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.11.1';
+    const ABOUT_VERSION = 'v5.12.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
