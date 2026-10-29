@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.4
+// @version      5.13.5
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1683,15 +1683,38 @@
         } catch (e) { return false; }
     }
     /* 原生 playbackRate descriptor：只取一次。
-       站点有时会在自己的世界给 <video> 装同名 getter/setter，普通赋值会被它拦掉
-       （严格模式下直接抛 TypeError，值永远停在 1），只有走原生 setter 才落得到媒体上。
-       旧注释里「跨 realm 调用 descriptor 会读到 NaN」的问题出在 get 上，
-       所以这里读回一律用 getNative，并把「差值为 NaN」当成 0 处理。 */
+       现场日志（v5.13.4 之后）：赋值**不抛错**、原生 getter 读回仍是 1，
+       说明拦的不是实例上的同名属性，而是**原型本身被站点改写**（优学院反倍速的
+       常见手法：把 HTMLMediaElement.prototype.playbackRate 换成空 setter + 恒 1 getter）。
+       这时再怎么调 d.set.call 调用的也是站点的假 setter。
+       对策：判断 setter 是不是原生（toString 含 [native code]），不是就从
+       同源空白 iframe 借一份没被污染的原生 descriptor 来用。 */
     let gRateDesc = null;
+    let gRateProtoPatched = false;
+    function pgDescIsNative(d) {
+        try { return !!d && !!d.set && /native code/.test(Function.prototype.toString.call(d.set)); }
+        catch (e) { return false; }
+    }
     function pgRateDescriptor() {
         if (gRateDesc !== null) return gRateDesc;
-        try { gRateDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate') || false; }
-        catch (e) { gRateDesc = false; }
+        let d = null;
+        try { d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate'); } catch (e) {}
+        if (!pgDescIsNative(d)) {
+            if (d) gRateProtoPatched = true;
+            try {
+                const ifr = document.createElement('iframe');
+                ifr.style.display = 'none';
+                ifr.setAttribute('aria-hidden', 'true');
+                (document.head || document.documentElement).appendChild(ifr);
+                const w = ifr.contentWindow;
+                if (w && w.HTMLMediaElement) {
+                    const nd = Object.getOwnPropertyDescriptor(w.HTMLMediaElement.prototype, 'playbackRate');
+                    if (pgDescIsNative(nd)) d = nd;
+                }
+                ifr.remove();
+            } catch (e) {}
+        }
+        gRateDesc = d || false;
         return gRateDesc;
     }
     const pgRateGuard = {
@@ -1785,7 +1808,7 @@
                                 chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x'
                                     + (nativeReal !== real ? '、原生读回 ' + nativeReal + 'x' : '')
                                     + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '')
-                                    + (fixed ? (r.bridgeSet ? '（已用页面脚本修正）' : '（已用页面世界句柄修正）') : '（仍未生效' + (r.err ? '：' + r.err : '') + '）'), 'warn');
+                                    + (fixed ? (r.bridgeSet ? '（已用页面脚本修正）' : '（已用页面世界句柄修正）') : '（仍未生效' + (r.err ? '：' + r.err : '') + (gRateProtoPatched ? '；站点改写了 playbackRate 原型' : '') + '）'), 'warn');
                             }
                         } catch (e) {}
                     }
@@ -4962,7 +4985,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.4';
+    const ABOUT_VERSION = 'v5.13.5';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
