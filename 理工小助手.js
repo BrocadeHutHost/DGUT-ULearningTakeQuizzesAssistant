@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.3
+// @version      5.13.4
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1682,6 +1682,18 @@
             return true;
         } catch (e) { return false; }
     }
+    /* 原生 playbackRate descriptor：只取一次。
+       站点有时会在自己的世界给 <video> 装同名 getter/setter，普通赋值会被它拦掉
+       （严格模式下直接抛 TypeError，值永远停在 1），只有走原生 setter 才落得到媒体上。
+       旧注释里「跨 realm 调用 descriptor 会读到 NaN」的问题出在 get 上，
+       所以这里读回一律用 getNative，并把「差值为 NaN」当成 0 处理。 */
+    let gRateDesc = null;
+    function pgRateDescriptor() {
+        if (gRateDesc !== null) return gRateDesc;
+        try { gRateDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate') || false; }
+        catch (e) { gRateDesc = false; }
+        return gRateDesc;
+    }
     const pgRateGuard = {
         target: 6, active: false, hooked: new WeakSet(),
         resetHistory: [], learnedInterval: 600, timer: null, lastDiagKey: '', lastDiagAt: 0,
@@ -1689,27 +1701,47 @@
         refresh() { this.target = pgRateClamp(getCourseHelperConfig().rate); },
         start() { this.init(); this.active = true; this.resetHistory = []; this.hookAll(); pgInjectRateBridge(); if (this.timer) clearTimeout(this.timer); this.scheduleNext(); },
         stop() { this.active = false; if (this.timer) { clearTimeout(this.timer); this.timer = null; } try { if (PAGE_WIN.__dgutRateBridge) PAGE_WIN.__dgutRateBridge.target = 0; } catch (e) {} },
-        /* 纯属性读写：不做 descriptor，任何 realm / 沙箱下都成立。
+        /* 纯属性读取：任何 realm / 沙箱下都成立。
            读不到/不是有限数 → 返回 0，这样「与 target 的差」必然 > 0.01，一定会触发 set。 */
         get(v) { try { const r = Number(v && v.playbackRate); return isFinite(r) ? r : 0; } catch (e) { return 0; } },
-        /* 设置倍速：先走沙箱侧赋值；读回不一致时用页面世界句柄再设一次。
-           返回 { ok, pageSet }：ok=沙箱侧赋值是否真的落到媒体上，pageSet=是否用了页面世界回退。 */
+        /* 原生 getter 读回：绕开页面自己装的同名 getter，读到的才是媒体真实倍速 */
+        getNative(v) {
+            const d = pgRateDescriptor();
+            try {
+                const n = Number(d && d.get ? d.get.call(v) : (v && v.playbackRate));
+                return isFinite(n) ? n : 0;
+            } catch (e) { return 0; }
+        },
+        /* 设置倍速，三条路依次尝试：
+           ① 原生 descriptor.set（绕过站点同名 setter）
+           ② 页面世界句柄
+           ③ 页面内联脚本桥（CSP 拦截时不可用）
+           返回 { ok, pageSet, bridgeSet, err }，err 保留赋值抛出的原始信息，便于现场定位。 */
         set(v, r) {
-            let ok = false;
-            try { if (v) v.playbackRate = r; ok = Math.abs(this.get(v) - r) <= 0.01; } catch (e) { ok = false; }
+            let err = '';
+            try {
+                const d = pgRateDescriptor();
+                if (d && d.set) d.set.call(v, r); else v.playbackRate = r;
+            } catch (e) { err = (e && (e.name || 'Error')) + ': ' + ((e && e.message) || e); }
+            let ok = Math.abs(this.getNative(v) - r) <= 0.01;
             let pageSet = false;
             if (!ok) {
                 try {
                     const i = pgVideoDocIndex(v);
                     const l = pgPageVideoList();
                     const pv = i >= 0 ? l[i] : null;
-                    if (pv && pv !== v) { pv.playbackRate = r; pageSet = true; }
+                    if (pv) {
+                        pageSet = true;
+                        const d = pgRateDescriptor();
+                        try { if (d && d.set) d.set.call(pv, r); else pv.playbackRate = r; } catch (e2) { try { pv.playbackRate = r; } catch (e3) {} }
+                        if (Math.abs(this.getNative(pv) - r) <= 0.01) ok = true;
+                    }
                 } catch (e) {}
             }
             /* 沙箱 / 页面句柄都改不动时，交给页面世界脚本用原生 setter 写 */
             let bridgeSet = false;
             if (!ok) bridgeSet = pgBridgeApply(r);
-            return { ok: ok, pageSet: pageSet, bridgeSet: bridgeSet };
+            return { ok: ok, pageSet: pageSet, bridgeSet: bridgeSet, err: err };
         },
         hookAll() { document.querySelectorAll('video').forEach(v => this.hook(v)); },
         hook(v) {
@@ -1749,13 +1781,18 @@
                         this.lastDiagKey = key; this.lastDiagAt = now;
                         try {
                             if (typeof chLog === 'function') {
-                                chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x' + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '') + (fixed ? (r.bridgeSet ? '（已用页面脚本修正）' : '（已用页面世界句柄修正）') : '（仍未生效）'), 'warn');
+                                const nativeReal = this.getNative(v);
+                                chLog('倍速守卫：设置 ' + t + 'x 后沙箱读回 ' + real + 'x'
+                                    + (nativeReal !== real ? '、原生读回 ' + nativeReal + 'x' : '')
+                                    + (pageReal !== null ? '，页面世界读回 ' + pageReal + 'x' : '')
+                                    + (fixed ? (r.bridgeSet ? '（已用页面脚本修正）' : '（已用页面世界句柄修正）') : '（仍未生效' + (r.err ? '：' + r.err : '') + '）'), 'warn');
                             }
                         } catch (e) {}
                     }
                 } else {
-                    try { if (typeof chLog === 'function') chLog('倍速守卫：把播放速率重设为 ' + t + 'x（触发：' + want + '）', 'muted'); } catch (e) {}
-                    try { if (typeof dbgHot === 'function') dbgHot('倍速', '重设 playbackRate=' + t + '（触发：' + want + '）'); } catch (e) {}
+                    const how = r.pageSet ? '（原生 setter 未落到媒体上，已用页面世界句柄修正）' : (r.bridgeSet ? '（已用页面脚本修正）' : '');
+                    try { if (typeof chLog === 'function') chLog('倍速守卫：把播放速率重设为 ' + t + 'x（触发：' + want + '）' + how, 'muted'); } catch (e) {}
+                    try { if (typeof dbgHot === 'function') dbgHot('倍速', '重设 playbackRate=' + t + '（触发：' + want + '）' + how); } catch (e) {}
                 }
             }
             this.syncSpeedBtn(v, t);
@@ -4925,7 +4962,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.3';
+    const ABOUT_VERSION = 'v5.13.4';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
