@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.2
+// @version      5.13.3
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -1545,10 +1545,20 @@
         chLogSave();
         log('[刷课]', text);
     }
+    /* 答案接口要**登录态**：uaapi 按会话 cookie（JSESSIONID 等）判定能不能返回
+       correctAnswerList，未登录只回空对象 {}。
+       事实更正（2026-10 查 TM 官方文档）：GM_xmlhttpRequest 默认**就是带 cookie 的**，
+       `anonymous` 只有置 true 才不发（"don't send cookies with the request"）。
+       所以旧代码并不是匿名请求，这里显式写 false 只是把默认行为写明、防止以后被改。
+       真正会丢 cookie 的是**跨站**：脚本若跑在 lms.dgut.edu.cn 上去请求 ua.dgut.edu.cn，
+       默认 withCredentials=false 不带凭据，必须显式置 true（同站时该参数无效）。
+       对照 06-theme-system/03-gAudioCtx.js 的 gmFetchEx：那边是「只认 token、
+       刻意匿名」，两个接口的认证方式本来就不同，不要混用。 */
     function pgRequestJson(url) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET', url, timeout: 15000,
+                anonymous: false, withCredentials: true,
                 onload: (res) => {
                     /* 修复：旧实现只拦 401/403，其它 4xx/5xx 只要响应体是 JSON 就会被当成
                        答案返回，错误信息会被当成「答案列表」参与后续解析。现在统一拦下。 */
@@ -1835,19 +1845,68 @@
         const rec = pgBank().find(r => String(r.qid) === String(qid));
         return rec && rec.answer ? String(rec.answer).split(/[,\s|，、]+/).filter(Boolean) : null;
     }
+    /* 页面身份的首选来源：站点自己的视图模型 koLearnCourseViewModel。
+       currentPage().id 就是接口要的 parentId，也是 DOM 里 #page<id> 的后缀，
+       比从 .page-item 的 id 里截数字可靠（选择器一改就失效）。 */
+    function pgVm() { try { return PAGE_WIN.koLearnCourseViewModel || null; } catch (e) { return null; } }
+    function pgVmVal(v) { try { return typeof v === 'function' ? v() : v; } catch (e) { return null; } }
+    function pgVmPage() { const r = pgVm(); const p = r ? pgVmVal(r.currentPage) : null; return p || null; }
+    function pgVmPageId() { const p = pgVmPage(); const id = p ? pgVmVal(p.id) : null; return id === null || id === undefined ? '' : String(id); }
+    /* 本页是否已完成：取站点服务端记录 currentPage().record().status。
+       返回 true / false，读不到返回 null（交给 DOM 标记与播放器状态兜底）。 */
+    function pgVmPageDone() {
+        const p = pgVmPage();
+        if (!p) return null;
+        const rec = pgVmVal(p.record);
+        if (!rec) return null;
+        const st = pgVmVal(rec.status);
+        if (st === null || st === undefined || st === '') return null;
+        if (typeof st === 'number') return st > 0;
+        if (typeof st === 'boolean') return st;
+        const s = String(st).toLowerCase();
+        return s === '1' || s === 'true' || s === 'finished' || s === 'completed';
+    }
+    /* 课件页 id（接口的 parentId）：先问视图模型，取不到再从 .page-item 的 id
+       里取「第一个数字起」的后缀（对齐参考实现 v1.6.9 的 pd.slice(pd.search(/\d/g))）。 */
+    function pgParentId() {
+        const vmId = pgVmPageId();
+        if (vmId) return vmId;
+        const a = document.querySelector('.page-name.active');
+        const box = (a && (a.closest('.page-item') || a.parentElement)) || document.querySelector('.page-item.active');
+        const raw = String((box && box.getAttribute('id')) || '');
+        const i = raw.search(/\d/);
+        return i >= 0 ? raw.slice(i) : '';
+    }
+    /* 答案接口（2026-10 用无效 id 实测路由，不看文档猜）：
+     *   校内私有化：https://ua.dgut.edu.cn/uaapi/questionAnswer/{qid}?parentId={pageId} → 200（缺 parentId 直接 400）
+     *   公有云：    https://api.ulearning.cn/questionAnswer/{qid}?parentId= → 200
+     *              api.ulearning.cn 上**没有** /uaapi 这一层（该路径实测 404），
+     *              旧实现两条分支共用 "/uaapi/..."，会给公有云发出必然 404 的请求。 */
+    function pgAnswerApiUrl(qid, parentId) {
+        const q = encodeURIComponent(qid);
+        const p = encodeURIComponent(parentId);
+        const host = String(location.hostname || '');
+        if (/(^|\.)ulearning\.cn$/i.test(host)) return `https://api.ulearning.cn/questionAnswer/${q}?parentId=${p}`;
+        /* 校内固定打 ua 主机：答案数据与登录态都在它上面，
+           即便脚本跑在 lms 上（跨域）也由 pgRequestJson 带上 cookie。 */
+        if (/(^|\.)dgut\.edu\.cn$/i.test(host)) return `https://ua.dgut.edu.cn/uaapi/questionAnswer/${q}?parentId=${p}`;
+        return `${location.origin}/uaapi/questionAnswer/${q}?parentId=${p}`;
+    }
     /* 真异步：内部 await，调用方拿到的就是最终结果，不再出现「同步取异步」 */
     async function pgRemoteAnswer(node) {
         const qid = pgQuestionId(node);
         if (!qid) return null;
         const cached = pgAnswerCacheGet(qid);
         if (cached) return cached;
-        const parentIdAttr = document.querySelector('.page-name.active')?.parentElement?.getAttribute('id') || '';
-        const parentId = parentIdAttr.length > 4 ? parentIdAttr.substring(4) : '';
-        const host = location.hostname.includes('dgut.edu.cn') ? 'https://ua.dgut.edu.cn' : 'https://api.ulearning.cn';
+        const parentId = pgParentId();
+        /* 没有 parentId 时接口必定 400：提前退出并说清楚，不再发一个注定失败的请求 */
+        if (!parentId) { pgLog('AnswerAPI', '取不到课件页 id（.page-item/.page-name.active 缺失），跳过答案接口：' + qid); return null; }
         try {
-            const data = await pgRequestJson(`${host}/uaapi/questionAnswer/${qid}?parentId=${parentId}`);
+            const data = await pgRequestJson(pgAnswerApiUrl(qid, parentId));
             const list = (data && Array.isArray(data.correctAnswerList) ? data.correctAnswerList : []).map(String).filter(Boolean);
             if (list.length) { pgAnswerCacheSet(qid, list); return list; }
+            /* 接口对「无此记录」返回空对象 {}，把实际键名打出来，方便区分「没答案」和「字段名变了」 */
+            pgLog('AnswerAPI', `接口无答案：qid=${qid} parentId=${parentId} 响应键=[${data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data}]`);
         } catch (e) { pgLog('AnswerAPI', '取答案失败：' + (e && e.message ? e.message : e)); }
         return null;
     }
@@ -2214,6 +2273,16 @@
             dbg('翻页', '页面里 .next-page-btn 共 ' + all.length + ' 个；可用性: ' + all.map(b => (b.disabled || b.classList.contains('disabled')) ? '禁用' : '可用').join('/'));
             btn = all.find(b => !b.disabled && !b.classList.contains('disabled')) || null;
         }
+        if (!btn) {
+            /* 兜底：站点换皮肤/版本时按钮类名会变，按顺序再找一遍。
+               这几个选择器来自 dgut-bot 在优学院上实测可用的集合。 */
+            const sels = ['.next-btn', '.btn-next', '.nextVideoBtn', '.mobile-next-page-btn'];
+            for (const sel of sels) {
+                const el = document.querySelector(sel);
+                if (el && !el.disabled && !el.classList.contains('disabled') && pgVisible(el)) { btn = el; dbgHot('翻页', '兜底选择器命中：' + sel); break; }
+            }
+            if (!btn) dbg('翻页', '兜底选择器均未命中：' + sels.join(' / '));
+        }
         if (btn) {
             dbgHot('翻页', 'OK 点击「下一页」按钮 → ' + pgElDesc(btn));
             pgTriggerMouseSequence(btn);
@@ -2552,6 +2621,10 @@
                只有在拿不到可信标记时才回退到播放器状态（currentTime/ended）。 */
             const statuses = pgVideoSiteStatuses();
             const useSite = statuses.length === videos.length;
+            /* 站点服务端记录：本页到底算不算看完。平台在视频播完后会把 currentTime
+               重置回 0 并自动重播，只看播放器状态会误判成「还没开始」，于是既不翻页
+               也不停播，表现就是「卡在这一页、而且只有 1 倍速」。 */
+            const vmDone = pgVmPageDone();
             /* 诊断日志：明确说出「站点标记到底能不能用」。
                如果这里报「未找到站点标记」，说明 .video-bottom 选择器在本页不成立，
                下面的判定会回退到播放器状态 —— 看到这行就能立刻定位问题。 */
@@ -2572,6 +2645,7 @@
                     if (s === 'finished') return true;
                     if (s === 'unviewed') return false;      // 站点说没看完 → 绝不翻页
                 }
+                if (vmDone === true) return true;            // 服务端记录已完成
                 return pgVideoFinished(m.v);
             };
 
@@ -2579,8 +2653,10 @@
                 const m = mine[i];
                 const v = m.v;
                 const done = isDone(m);
-                dbg('判定', '本页第 ' + (i + 1) + '/' + mine.length + ' 个 video（全局序号 ' + m.idx + '）：站点标记=' + (useSite ? statuses[m.idx] : '(不可用)') + ' · isDone=' + done + ' · rate=' + dbgFmt(pgRateGuard.get(v)) + 'x(目标 ' + pgRateGuard.target + 'x)');
-                if (done) continue;
+                dbg('判定', '本页第 ' + (i + 1) + '/' + mine.length + ' 个 video（全局序号 ' + m.idx + '）：站点标记=' + (useSite ? statuses[m.idx] : '(不可用)') + ' · 服务端记录=' + dbgFmt(vmDone) + ' · isDone=' + done + ' · rate=' + dbgFmt(pgRateGuard.get(v)) + 'x(目标 ' + pgRateGuard.target + 'x)');
+                /* 已完成就直接跳过，但仍在播放的要停掉：平台播完会自己从头重播，
+                   不停的话这一页会以 1 倍速白放一遍。 */
+                if (done) { try { if (!v.paused) v.pause(); } catch (e) {} continue; }
 
                 /* 站点还没标记 finished，但播放器已经到结尾了：
                    按参考实现的做法后退 3 秒重播，促使站点补上完成标记；
@@ -4849,7 +4925,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.2';
+    const ABOUT_VERSION = 'v5.13.3';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
