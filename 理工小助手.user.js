@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         优学院助手 + 文档工具（日程/刷课/互评/读书 + MD转Word·PDF + 电子签名）
 // @namespace    https://github.com/BrocadeHutHost
-// @version      5.13.5
+// @version      5.14.0
 // @description  优学院近七天日程（只读活动日历）+ 刷课助手(倍速守卫/自动答题/题库) + 作业互评面板 + 求是读书 + 外观设置 + Markdown 转 Word/PDF(直出下载) + Word 转 PDF + 图片工具 + 手绘电子签名。（已移除课程签到功能，请诚信签到打卡）
 // @author       BrocadeHutHost
 // @match        *://*/*
@@ -129,6 +129,7 @@
         IMG_DECODE_FAIL:    { code: 7721, msg: '图片解码失败' },
         IMG_ENCODE_FAIL:    { code: 7722, msg: '图片编码失败' },
         IMG_READ_FAIL:      { code: 7711, msg: '读取文件失败' },
+        IMG_TOO_LARGE:      { code: 7762, msg: '图片尺寸过大，继续处理可能卡死浏览器' },
         CORE_NO_GM_XHR:     { code: 8841, msg: 'GM_xmlhttpRequest 不可用' },
         CORE_NO_GM_COOKIE:  { code: 8842, msg: 'GM_cookie 不可用' },
         CORE_NO_GM_STORE:   { code: 8843, msg: 'GM_setValue/GM_getValue 不可用' },
@@ -149,7 +150,7 @@
         { module: '求是读书',   codes: [4441, 4461] },
         { module: '文档工具',   codes: [5521, 5522, 5523, 5541, 5542, 5543, 5561] },
         { module: 'Word 转 PDF', codes: [6621, 6622, 6641, 6651] },
-        { module: '图片工具',   codes: [7711, 7721, 7722, 7761] }
+        { module: '图片工具',   codes: [7711, 7721, 7722, 7761, 7762] }
     ];
     const ERR_BY_CODE = (() => {
         const m = {};
@@ -775,6 +776,19 @@
         .dgut-err-row .dgut-err-code { flex: none; min-width: 60px; }
         .dgut-link { color: var(--dgut-primary); text-decoration: none; }
         .dgut-link:hover { text-decoration: underline; }
+        /* 面板自成一层：样式与布局重算不外溢到宿主页面 */
+        #dgut-main-panel { contain: layout style; }
+        /* 按下反馈 + 键盘焦点可见，点起来更实、tab 过去也看得见 */
+        .dgut-btn:active { transform: scale(.97); }
+        .dgut-nav:active { transform: scale(.98); }
+        .dgut-btn:focus-visible, .dgut-nav:focus-visible,
+        .dgut-input:focus-visible, .dgut-select:focus-visible, .dgut-textarea:focus-visible {
+            outline: 2px solid var(--dgut-primary); outline-offset: 2px;
+        }
+        .dgut-nav.dgut-tab-active { box-shadow: inset 3px 0 0 var(--dgut-primary); }
+        .dgut-card { scroll-margin: 8px; }
+        /* 鼠标停在提示卡上就先别消失，进度条也跟着停 */
+        #dgut-toast-card:hover .dgut-toast-progress { animation-play-state: paused; }
     `);
 
     let gAudioCtx = null;
@@ -822,8 +836,16 @@
             ${subtext ? `<div class="dgut-toast-sub">${escapeHtml(subtext)}</div>` : ''}
             <div class="dgut-toast-progress" style="animation-duration:${durationMs}ms;"></div>`;
         document.body.appendChild(card);
-        card.onclick = () => card.remove();
-        setTimeout(() => card.remove(), durationMs + 500);
+        let hideTimer = 0;
+        const hide = () => {
+            clearTimeout(hideTimer);
+            card.style.transition = 'opacity .2s ease, transform .2s ease';
+            card.style.opacity = '0';
+            card.style.transform = 'translateX(-50%) translateY(-10px)';
+            setTimeout(() => card.remove(), 200);
+        };
+        card.onclick = hide;
+        hideTimer = setTimeout(hide, durationMs + 500);
     }
 
     /* ============================================================
@@ -1307,6 +1329,10 @@
             box.innerHTML = `<div style="text-align:center;color:var(--dgut-on-surface-variant);padding:18px 8px;font-size:13px;">${gSchedError ? '读取失败，可点上方「刷新」重试。' : '近七天没有日程，也没有未来的考试。'}</div>`;
             return;
         }
+        /* 内容没变就别重建 DOM：定时清理每 60 秒会调一次，重建会闪一下且白干活 */
+        const sig = gSchedItems.map(it => it.id + (done[String(it.id)] ? '1' : '0')).join('|');
+        if (box.dataset.sig === sig) { schedPruneDone(gSchedItems); return; }
+        box.dataset.sig = sig;
         box.innerHTML = gSchedItems.map(it => {
             const isDone = !!done[String(it.id)];
             let when;
@@ -1323,14 +1349,19 @@
                 </label>
             </div>`;
         }).join('');
-        box.querySelectorAll('input[data-sid]').forEach(cb => {
-            cb.onchange = () => {
-                const id = cb.dataset.sid;
-                schedSetDone(id, cb.checked);
+        /* 勾选用事件委托：每个复选框都挂一个监听，几十项时纯属浪费 */
+        if (box.dataset.bound !== '1') {
+            box.dataset.bound = '1';
+            box.addEventListener('change', (e) => {
+                const cb = e.target;
+                if (!cb || !cb.matches || !cb.matches('input[data-sid]')) return;
+                schedSetDone(cb.dataset.sid, cb.checked);
                 const row = cb.closest('.dgut-sched-item');
                 if (row) row.classList.toggle('is-done', cb.checked);
-            };
-        });
+                const d = schedDoneMap();
+                box.dataset.sig = (gSchedItems || []).map(it => it.id + (d[String(it.id)] ? '1' : '0')).join('|');
+            });
+        }
         schedPruneDone(gSchedItems);
     }
     function schedStopTicker() { if (gSchedTimer) { clearInterval(gSchedTimer); gSchedTimer = null; } }
@@ -3277,12 +3308,15 @@
         if (modal && pgVisible(modal)) { const b = modal.querySelector('.btn-submit'); if (b && pgVisible(b)) b.click(); return; }
         if (rdSolveChapterModal()) return;
         const key = rdBookKey();
-        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; gRead.serverTotal = null; gRead.lastServerAt = 0; }
+        if (key !== gRead.bookKey) { rdSetBookTime(gRead.bookKey, gRead.total); gRead.bookKey = key; gRead.accumulated = rdBookTime(key); gRead.sessionStart = Date.now(); gRead.lastSave = gRead.accumulated; gRead.lastAdvancePageId = null; gRead.lastAdvanceAt = 0; gRead.stuckWarned = false; gRead.serverTotal = null; gRead.lastServerAt = 0; gRead.flat = null; gRead.flatKey = ''; }
         /* 阅读中定期刷新服务端时长；本地累计落后时自动补到服务端值 */
         if (Date.now() - (gRead.lastServerAt || 0) >= READ_SERVER_POLL_SEC * 1000) rdRefreshServer(false);
         if (vm && vm.currentPage) {
-            const list = rdFlatList(vm);
+            /* 章节树不会每秒变：展平结果缓存住，换书或找不到当前页时才重建 */
+            if (!gRead.flat || gRead.flatKey !== key) { gRead.flat = rdFlatList(vm); gRead.flatKey = key; }
+            let list = gRead.flat;
             const pid = rdPageId(vm.currentPage());
+            if (pid && rdFindIndex(list, pid) < 0) { gRead.flat = rdFlatList(vm); list = gRead.flat; }
             if (pid && pid !== gRead.curPageId) { gRead.curPageId = pid; gRead.pageStart = Date.now(); }
             /* 是否已满 4h10m 以服务端阅读时长为准（服务端暂无记录才用本地） */
             if ((gRead.serverTotal > 0 ? gRead.serverTotal : gRead.total) >= READ_MIN_SEC) {
@@ -3492,8 +3526,11 @@ ${signaturesHtml(signatures)}
                 setTimeout(r, 2000);
             }))));
             await new Promise(r => setTimeout(r, 80));
+            /* 越长的文档越要压低渲染倍率：整篇一次性渲染，2 倍率下超长文档会直接撑爆内存 */
+            const docH = holder.scrollHeight || 0;
+            const scale = docH > 20000 ? 1 : (docH > 9000 ? 1.5 : 2);
             const canvas = await h2c(holder, {
-                scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
+                scale, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
                 width: holder.scrollWidth, height: holder.scrollHeight,
                 windowWidth: PDF_RENDER_W, windowHeight: Math.max(holder.scrollHeight, 800)
             });
@@ -3503,12 +3540,14 @@ ${signaturesHtml(signatures)}
             const pdf = new PDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
             try { pdf.setProperties({ title: title || 'document', creator: 'DGUT Helper' }); } catch (e) {}
             let y = 0, pageIdx = 0;
+            /* 切片画布只建一次并复用：每页新建一张大画布会让长文档的峰值内存翻好几倍 */
+            const slice = document.createElement('canvas');
+            slice.width = canvas.width; slice.height = pageSlicePx;
+            const sctx = slice.getContext('2d');
             while (y < canvas.height) {
                 const sliceH = Math.min(pageSlicePx, canvas.height - y);
                 if (sliceH <= 0) break;
-                const slice = document.createElement('canvas');
-                slice.width = canvas.width; slice.height = sliceH;
-                const sctx = slice.getContext('2d');
+                if (slice.height !== sliceH) slice.height = sliceH;   // 只有最后一页会改一次
                 sctx.fillStyle = '#ffffff'; sctx.fillRect(0, 0, slice.width, slice.height);
                 sctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
                 const dataUrl = slice.toDataURL('image/jpeg', 0.94);
@@ -3522,6 +3561,7 @@ ${signaturesHtml(signatures)}
             return pdf.output('blob');
         } finally {
             holder.remove();
+            try { slice.width = 0; slice.height = 0; } catch (e) {}   // 主动释放大画布
         }
     }
     function openPrintWindow(html) {
@@ -3532,7 +3572,9 @@ ${signaturesHtml(signatures)}
             win = window.open(url, '_blank');
             if (win) {
                 setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
-                const doPrint = () => { try { win.focus(); win.print(); } catch (e) {} };
+                /* 只打印一次：load 回调与兜底定时器都会触发，不去重会连弹两个打印框 */
+                let printed = false;
+                const doPrint = () => { if (printed) return; printed = true; try { win.focus(); win.print(); } catch (e) {} };
                 try { win.addEventListener('load', () => setTimeout(doPrint, 400), { once: true }); } catch (e) { setTimeout(doPrint, 900); }
                 setTimeout(doPrint, 1400);
                 return win;
@@ -3608,21 +3650,33 @@ ${signaturesHtml(signatures)}
     function createSignaturePad(canvas) {
         const ctx = canvas.getContext('2d');
         const dpr = Math.max(1, window.devicePixelRatio || 1);
+        /* 这两个状态必须在 resize() 首次调用之前声明，否则会撞上 TDZ */
+        let drawing = false, lastX = 0, lastY = 0;
+        let dirty = false;          // 画过东西才需要真的去扫描像素
+        let pendingPt = null, rafId = 0;
         const resize = () => {
             const r = canvas.getBoundingClientRect();
             if (r.width === 0 || r.height === 0) return;
-            canvas.width = Math.round(r.width * dpr);
-            canvas.height = Math.round(r.height * dpr);
+            const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+            if (canvas.width === w && canvas.height === h) return;
+            /* 改尺寸会清空画布：先把笔迹存下来，重设后再贴回去，避免面板缩放丢签名 */
+            let keep = null;
+            if (canvas.width > 0 && canvas.height > 0 && dirty) {
+                keep = document.createElement('canvas');
+                keep.width = canvas.width; keep.height = canvas.height;
+                keep.getContext('2d').drawImage(canvas, 0, 0);
+            }
+            canvas.width = w; canvas.height = h;
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.scale(dpr, dpr);
             ctx.lineWidth = 2.5;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.strokeStyle = '#1D1B20';
+            if (keep) ctx.drawImage(keep, 0, 0, keep.width / dpr, keep.height / dpr);
         };
         canvas.__dgutPadResize = resize;   // 面板缩放时重新同步画板分辨率
         resize();
-        let drawing = false, lastX = 0, lastY = 0;
         const pos = (e) => {
             const r = canvas.getBoundingClientRect();
             const p = e.touches ? (e.touches[0] || e.changedTouches[0]) : e;
@@ -3630,24 +3684,34 @@ ${signaturesHtml(signatures)}
         };
         const onStart = (e) => {
             e.preventDefault();
-            drawing = true;
+            drawing = true; dirty = true;
             const p = pos(e); lastX = p.x; lastY = p.y;
             ctx.beginPath();
             ctx.arc(p.x, p.y, 1.2, 0, Math.PI * 2);
             ctx.fillStyle = '#1D1B20';
             ctx.fill();
         };
+        /* 鼠标一动就画一笔太浪费：攒到下一帧一起描 */
+        const flushMove = () => {
+            rafId = 0;
+            if (!drawing || !pendingPt) return;
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(pendingPt.x, pendingPt.y);
+            ctx.stroke();
+            lastX = pendingPt.x; lastY = pendingPt.y;
+            pendingPt = null;
+        };
         const onMove = (e) => {
             if (!drawing) return;
             e.preventDefault();
-            const p = pos(e);
-            ctx.beginPath();
-            ctx.moveTo(lastX, lastY);
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            lastX = p.x; lastY = p.y;
+            pendingPt = pos(e);
+            if (!rafId) rafId = requestAnimationFrame(flushMove);
         };
-        const onEnd = () => { drawing = false; };
+        const onEnd = () => {
+            if (rafId) { cancelAnimationFrame(rafId); rafId = 0; flushMove(); }
+            drawing = false;
+        };
         canvas.addEventListener('mousedown', onStart);
         canvas.addEventListener('mousemove', onMove);
         canvas.addEventListener('mouseup', onEnd);
@@ -3657,8 +3721,12 @@ ${signaturesHtml(signatures)}
         canvas.addEventListener('touchend', onEnd);
         canvas.addEventListener('touchcancel', onEnd);
         return {
-            clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); },
+            clear() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                dirty = false;
+            },
             isEmpty() {
+                if (!dirty) return true;
                 try {
                     const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
                     for (let i = 3; i < d.length; i += 4) { if (d[i] !== 0) return false; }
@@ -3706,6 +3774,7 @@ ${signaturesHtml(signatures)}
             <div class="dgut-card">
                 <div class="dgut-section-title">Markdown 内容</div>
                 <textarea id="dgut-doc-md" class="dgut-textarea" placeholder="在此输入 Markdown 内容…" style="width:100%;min-height:180px;resize:vertical;font-family:Consolas,monospace;line-height:1.6;">${escapeHtml(draft)}</textarea>
+                <div id="dgut-doc-count" style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:4px;"></div>
                 <div class="dgut-row" style="margin-top:10px;">
                     <input id="dgut-doc-title" class="dgut-input" placeholder="文件名" value="${escapeHtml(title)}" style="flex:1;min-width:140px;">
                     <button id="dgut-doc-preview" class="dgut-btn">${icons.list} 预览</button>
@@ -3731,20 +3800,41 @@ ${signaturesHtml(signatures)}
         const titleEl = ac.querySelector('#dgut-doc-title');
         const previewBox = ac.querySelector('#dgut-doc-preview-box');
         const pad = createSignaturePad(ac.querySelector('#dgut-sig-canvas'));
-        mdEl.addEventListener('input', () => saveDocDraft(mdEl.value));
-        titleEl.addEventListener('input', () => saveDocTitle(titleEl.value));
+        /* 逐字写入存储会让长文打字卡顿：合并成停手 400ms 后写一次 */
+        const countEl = ac.querySelector('#dgut-doc-count');
+        const updateCount = () => {
+            const md = mdEl.value || '';
+            countEl.textContent = `${md.replace(/\s+/g, '').length} 字 · ${md ? md.split('\n').length : 0} 行`;
+        };
+        let draftTimer = 0, titleTimer = 0;
+        mdEl.addEventListener('input', () => {
+            updateCount();
+            clearTimeout(draftTimer);
+            draftTimer = setTimeout(() => saveDocDraft(mdEl.value), 400);
+        });
+        titleEl.addEventListener('input', () => {
+            clearTimeout(titleTimer);
+            titleTimer = setTimeout(() => saveDocTitle(titleEl.value), 400);
+        });
+        updateCount();
+        let lastMd = '', lastHtml = '';
         ac.querySelector('#dgut-doc-preview').onclick = async () => {
             const md = mdEl.value;
             if (!md.trim()) { showStatus(errFull(ERR.DOC_EMPTY_MD), true); return; }
-            try { const html = await mdToHtml(md); previewBox.style.display = 'block'; previewBox.innerHTML = html; }
-            catch (e) { showStatus(e.message, true); }
+            try {
+                /* 内容没变就别再解析一遍 */
+                if (!(md === lastMd && lastHtml)) { lastHtml = await mdToHtml(md); lastMd = md; }
+                previewBox.style.display = 'block';
+                previewBox.innerHTML = lastHtml;
+            } catch (e) { showStatus(e.message, true); }
         };
         ac.querySelector('#dgut-doc-word').onclick = exportMdToWord;
         ac.querySelector('#dgut-doc-pdf').onclick = (e) => exportMdToPdf(e.currentTarget);
         ac.querySelector('#dgut-doc-print').onclick = exportMdToPrintView;
         ac.querySelector('#dgut-doc-clear').onclick = () => {
             if (!confirm('清空 Markdown 内容？此操作不可撤销。')) return;
-            mdEl.value = ''; saveDocDraft('');
+            mdEl.value = ''; saveDocDraft(''); updateCount();
+            lastMd = ''; lastHtml = '';
             previewBox.style.display = 'none'; previewBox.innerHTML = '';
         };
         ac.querySelector('#dgut-sig-clear').onclick = () => pad.clear();
@@ -3814,6 +3904,27 @@ ${signaturesHtml(signatures)}
         const result = await mammoth.convertToHtml({ arrayBuffer }, options);
         return { html: result.value || '', messages: result.messages || [] };
     }
+    /* 一句话概览：段落 / 图片 / 表格 / 字数，让用户在导出前就知道规模 */
+    function wpSummarize(html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const p = doc.querySelectorAll('p').length;
+            const img = doc.querySelectorAll('img').length;
+            const tb = doc.querySelectorAll('table').length;
+            const chars = (doc.body && doc.body.textContent || '').replace(/\s+/g, '').length;
+            return `约 ${chars} 字 · ${p} 段 · ${img} 图 · ${tb} 表`;
+        } catch (e) { return ''; }
+    }
+    /* 同一份 docx 解析一次就够：导出 PDF / 打印 / 转 .doc 三个按钮共用结果 */
+    let gWpCache = null;
+    function wpParseCached(file) {
+        const key = file.name + ':' + file.size + ':' + (file.lastModified || 0);
+        if (gWpCache && gWpCache.key === key) return Promise.resolve(gWpCache);
+        return wpParseDocxFile(file).then(r => {
+            gWpCache = { key, html: r.html, messages: r.messages };
+            return gWpCache;
+        });
+    }
     function renderWordPdfView(ac) {
         ac.innerHTML = actionHeader(ACTION_TITLES.wordpdf) + `
             <div class="dgut-card">
@@ -3844,6 +3955,25 @@ ${signaturesHtml(signatures)}
             statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`;
         };
         const resolveTitle = (file) => (titleEl.value || '').trim() || file.name.replace(/\.docx$/i, '') || `Word文档_${dateKey()}`;
+        /* 选完文件就解析：按钮只负责导出，不用每次都等一遍 mammoth */
+        fileEl.addEventListener('change', async () => {
+            const file = fileEl.files && fileEl.files[0];
+            if (!file) return;
+            gWpCache = null;
+            if (!(titleEl.value || '').trim()) titleEl.value = file.name.replace(/\.docx$/i, '');
+            previewEl.textContent = '正在解析…';
+            setStatus('正在解析文档…');
+            try {
+                const { html, messages } = await wpParseCached(file);
+                if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
+                previewEl.innerHTML = html;
+                const warns = (messages || []).filter(m => m.type === 'warning').length;
+                setStatus(`✓ 解析完成${warns ? `，${warns} 条兼容性警告（可忽略）` : ''} · ${wpSummarize(html)}`);
+            } catch (err) {
+                previewEl.textContent = '解析失败';
+                setStatus('解析失败：' + err.message, true);
+            }
+        });
         ac.querySelector('#dgut-wp-pdf').onclick = async (e) => {
             const btn = e.currentTarget;
             const file = fileEl.files && fileEl.files[0];
@@ -3852,7 +3982,7 @@ ${signaturesHtml(signatures)}
             btn.disabled = true; btn.textContent = '生成中…';
             setStatus('正在加载依赖并解析文档…');
             try {
-                const { html, messages } = await wpParseDocxFile(file);
+                const { html, messages } = await wpParseCached(file);
                 if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
@@ -3861,7 +3991,7 @@ ${signaturesHtml(signatures)}
                 const blob = await htmlToPdfBlob(html, title, (cur, tot) => { btn.textContent = `生成中 ${cur}/${tot}`; });
                 imgDownloadBlob(blob, `${title}.pdf`);
                 const warns = (messages || []).filter(m => m.type === 'warning').length;
-                setStatus(`? 已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）${warns ? `，${warns} 条兼容性警告` : ''}`);
+                setStatus(`✓ 已导出 PDF：${title}.pdf（${imgFmtSize(blob.size)}）${warns ? `，${warns} 条兼容性警告` : ''}`);
             } catch (err) {
                 setStatus('转换失败：' + err.message, true);
             } finally {
@@ -3873,7 +4003,7 @@ ${signaturesHtml(signatures)}
             if (!file) { setStatus(errFull(ERR.WP_NO_FILE), true); return; }
             setStatus('正在解析…');
             try {
-                const { html, messages } = await wpParseDocxFile(file);
+                const { html, messages } = await wpParseCached(file);
                 if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
@@ -3881,7 +4011,7 @@ ${signaturesHtml(signatures)}
                 const win = openPrintWindow(wpBuildPrintHtml(html, title));
                 if (!win) throw new Error('弹窗被拦截，请允许本站弹窗后重试');
                 const warns = (messages || []).filter(m => m.type === 'warning').length;
-                setStatus(`? 解析完成，已在打印视图中打开。${warns ? `（${warns} 条兼容性警告，可忽略）` : ''}`);
+                setStatus(`✓ 解析完成，已在打印视图中打开。${warns ? `（${warns} 条兼容性警告，可忽略）` : ''}`);
             } catch (e) { setStatus('转换失败：' + e.message, true); }
         };
         ac.querySelector('#dgut-wp-word').onclick = async () => {
@@ -3889,19 +4019,15 @@ ${signaturesHtml(signatures)}
             if (!file) { setStatus(errFull(ERR.WP_NO_FILE), true); return; }
             setStatus('正在解析…');
             try {
-                const { html } = await wpParseDocxFile(file);
+                const { html } = await wpParseCached(file);
                 if (!html.trim()) throw new Error(errFull(ERR.WP_EMPTY));
                 previewEl.innerHTML = html;
                 const title = resolveTitle(file);
                 saveDocTitle(title);
                 const full = wpBuildPrintHtml(html, title);
                 const blob = new Blob(['\uFEFF', full], { type: 'application/msword;charset=utf-8' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `${title}.doc`;
-                document.body.appendChild(a); a.click(); a.remove();
-                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-                setStatus(`? 已导出：${title}.doc`);
+                imgDownloadBlob(blob, `${title}.doc`);
+                setStatus(`✓ 已导出：${title}.doc`);
             } catch (e) { setStatus('导出失败：' + e.message, true); }
         };
     }
@@ -3922,6 +4048,14 @@ ${signaturesHtml(signatures)}
         { id: 'custom', label: '自定义（手动填宽高）',  w: -1, h: -1 }
     ];
     let gImgState = null;
+    let gImgLastResult = null;
+    let gImgBusy = false;   // 处理中：挡住重复点击造成的并行编码
+    /* 结果指纹：图片身份 + 当前配置，用于判断上次处理结果还能不能用 */
+    function imgCfgSig(cfg) {
+        const f = gImgState && gImgState.file;
+        const id = f ? (f.name + ':' + f.size + ':' + (f.lastModified || 0)) : '';
+        return id + '|' + JSON.stringify(cfg);
+    }
 
     /* ---------- Web Worker：像素级滤镜多线程执行 ---------- */
     const IMG_WORKER_SRC = `
@@ -4160,18 +4294,34 @@ self.onmessage = function (e) {
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / 1024 / 1024).toFixed(2) + ' MB';
     }
+    /* 直接喂 blob URL 解码：省掉 FileReader 的 base64 中转（大图可省 1/3 内存与一次整文件编码） */
     function imgFileToImage(file) {
         return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const img = new Image();
-                img.onload = () => resolve({ img, dataUrl: reader.result, file });
-                img.onerror = () => reject(new Error(errFull(ERR.IMG_DECODE_FAIL)));
-                img.src = reader.result;
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            const done = () => { try { URL.revokeObjectURL(url); } catch (e) {} };
+            img.onload = () => {
+                const finish = () => { done(); resolve({ img, file }); };
+                /* 先强制解码完再释放 URL，避免个别浏览器 revoke 后位图被回收 */
+                if (typeof img.decode === 'function') img.decode().then(finish, finish);
+                else finish();
             };
-            reader.onerror = () => reject(new Error(errFull(ERR.IMG_READ_FAIL)));
-            reader.readAsDataURL(file);
+            img.onerror = () => { done(); reject(new Error(errFull(ERR.IMG_DECODE_FAIL))); };
+            img.src = url;
         });
+    }
+    /* 预览按显示上限缩放：6K 原图不再用全尺寸画布常驻内存 */
+    const IMG_PREVIEW_MAX = 1400;
+    function imgPaintPreview(canvasEl, src, sw, sh) {
+        const scale = Math.min(1, IMG_PREVIEW_MAX / Math.max(sw, sh));
+        const w = Math.max(1, Math.round(sw * scale)), h = Math.max(1, Math.round(sh * scale));
+        if (canvasEl.width !== w) canvasEl.width = w;
+        if (canvasEl.height !== h) canvasEl.height = h;
+        const c = canvasEl.getContext('2d');
+        c.clearRect(0, 0, w, h);
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = 'high';
+        c.drawImage(src, 0, 0, w, h);
     }
     function imgCanvasToBlob(canvas, mime, quality) {
         return new Promise((resolve, reject) => {
@@ -4286,6 +4436,25 @@ self.onmessage = function (e) {
         }
         return last;
     }
+    /* 小样探测：文件体积与像素数近似成正比，先在缩略图上二分出质量，
+       再回到全尺寸精修 —— 把「十几遍整幅编码」降到「一遍小图 + 几遍大图」。 */
+    async function imgProbeQuality(canvas, targetBytes, mime) {
+        const maxSide = Math.max(canvas.width, canvas.height);
+        const s = Math.min(1, 512 / maxSide);
+        const pw = Math.max(1, Math.round(canvas.width * s)), ph = Math.max(1, Math.round(canvas.height * s));
+        const probe = document.createElement('canvas');
+        probe.width = pw; probe.height = ph;
+        probe.getContext('2d').drawImage(canvas, 0, 0, pw, ph);
+        const pxRatio = (canvas.width * canvas.height) / (pw * ph);
+        let lo = 0.01, hi = 1.0, best = 0.01;
+        for (let i = 0; i < 7; i++) {
+            const mid = (lo + hi) / 2;
+            let b;
+            try { b = await imgCanvasToBlob(probe, mime, mid); } catch (e) { break; }
+            if (b.size * pxRatio <= targetBytes) { best = mid; lo = mid; } else { hi = mid; }
+        }
+        return best;
+    }
     async function imgCompressToTargetSize(canvas, targetBytes, mime, allowResize, smooth) {
         if (mime === 'image/png') {
             const first = await imgCanvasToBlob(canvas, mime, 1.0);
@@ -4296,14 +4465,27 @@ self.onmessage = function (e) {
         }
         const maxBlob = await imgCanvasToBlob(canvas, mime, 1.0);
         if (maxBlob.size <= targetBytes) return { blob: maxBlob, achieved: true };
-        let lo = 0.01, hi = 1.0, best = null;
-        for (let i = 0; i < 12; i++) {
+        const q0 = await imgProbeQuality(canvas, targetBytes, mime);
+        let lo = Math.max(0.01, q0 - 0.18), hi = Math.min(1.0, q0 + 0.18), best = null;
+        for (let i = 0; i < 5; i++) {
             const mid = (lo + hi) / 2;
             let blob;
             try { blob = await imgCanvasToBlob(canvas, mime, mid); }
             catch (e) { break; }
             if (blob.size <= targetBytes) { best = blob; lo = mid; }
             else { hi = mid; }
+        }
+        if (!best) {
+            /* 小样估计偏差过大时退回全范围二分，保证不比原来差 */
+            lo = 0.01; hi = q0;
+            for (let i = 0; i < 6; i++) {
+                const mid = (lo + hi) / 2;
+                let blob;
+                try { blob = await imgCanvasToBlob(canvas, mime, mid); }
+                catch (e) { break; }
+                if (blob.size <= targetBytes) { best = blob; lo = mid; }
+                else { hi = mid; }
+            }
         }
         if (best) return { blob: best, achieved: true };
         let minBlob;
@@ -4362,17 +4544,27 @@ self.onmessage = function (e) {
             smooth: q('#dgut-img-smooth')?.value || 'high'
         };
     }
+    const IMG_MAX_PIXELS = 50000000;   // 约 200 MB 位图，再大浏览器容易直接崩
+    const imgYield = () => new Promise((r) => setTimeout(r, 0));
     async function imgRunPipeline(ac) {
         const st = gImgState;
         if (!st || !st.img) throw new Error(errFull(ERR.IMG_NO_FILE));
         const cfg = imgReadCfg(ac);
+        const nw = st.img.naturalWidth, nh = st.img.naturalHeight;
+        if (nw * nh > IMG_MAX_PIXELS) {
+            throw new Error(errFull(ERR.IMG_TOO_LARGE, `${nw}×${nh}，请先用「按百分比」缩小`));
+        }
         let canvas = document.createElement('canvas');
-        canvas.width = st.img.naturalWidth; canvas.height = st.img.naturalHeight;
+        canvas.width = nw; canvas.height = nh;
         let ctx = canvas.getContext('2d');
         ctx.drawImage(st.img, 0, 0);
+        await imgYield();
         if (cfg.sharpen || cfg.bw || cfg.eq) await imgApplyFiltersAsync(canvas, cfg);
         const tgt = imgComputeTargetSize(canvas.width, canvas.height, cfg);
-        if (tgt.w !== canvas.width || tgt.h !== canvas.height) canvas = imgDrawResized(canvas, tgt.w, tgt.h, cfg.fit, cfg.smooth);
+        if (tgt.w !== canvas.width || tgt.h !== canvas.height) {
+            canvas = imgDrawResized(canvas, tgt.w, tgt.h, cfg.fit, cfg.smooth);
+            await imgYield();
+        }
         let mime;
         switch (cfg.format) {
             case 'jpeg': mime = 'image/jpeg'; break;
@@ -4411,7 +4603,7 @@ self.onmessage = function (e) {
             blob = await imgInflateToSize(blob, cfg.inflateKB * 1024, cfg.inflateMode);
             inflated = true;
         }
-        return { canvas, blob, mime, inflated, achieved, targetBytes, capped };
+        return { canvas, blob, mime, inflated, achieved, targetBytes, capped, cfg };
     }
     function imgExtFromMime(mime) {
         if (mime === 'image/jpeg') return 'jpg';
@@ -4421,6 +4613,8 @@ self.onmessage = function (e) {
         return 'png';
     }
     function renderImageToolView(ac) {
+        /* 上次是在处理途中切走的：重新进来要把锁放开，否则按钮点了没反应 */
+        gImgBusy = false;
         const saved = imgLoadCfg();
         const ratioOpts = IMG_RATIO_PRESETS.map(p => `<option value="${p.id}" ${p.id === saved.ratioPreset ? 'selected' : ''}>${p.label}</option>`).join('');
         const opt = (v, cur) => v === cur ? ' selected' : '';
@@ -4431,8 +4625,9 @@ self.onmessage = function (e) {
                     <button id="dgut-img-reset" class="dgut-btn" style="flex:none;">重置</button>
                 </div>
                 <div id="dgut-img-info" style="font-size:12px;color:var(--dgut-on-surface-variant);margin-bottom:10px;line-height:1.7;">尚未选择图片。</div>
-                <div style="background:var(--dgut-surface-2);border:1px solid var(--dgut-outline-variant);border-radius:10px;padding:10px;text-align:center;">
+                <div id="dgut-img-drop" style="background:var(--dgut-surface-2);border:1px dashed var(--dgut-outline-variant);border-radius:10px;padding:10px;text-align:center;transition:border-color .15s,background .15s;">
                     <canvas id="dgut-img-preview" style="max-width:100%;max-height:300px;border-radius:6px;background:repeating-conic-gradient(var(--dgut-surface-3) 0% 25%, var(--dgut-surface-2) 0% 50%) 50% / 16px 16px;"></canvas>
+                    <div id="dgut-img-drophint" style="font-size:11px;color:var(--dgut-on-surface-variant);margin-top:6px;">也可以把图片拖到这里</div>
                 </div>
             </div>
             <div class="dgut-card">
@@ -4464,6 +4659,10 @@ self.onmessage = function (e) {
                             <option value="fill"${opt('fill', saved.fit)}>拉伸</option>
                         </select>
                     </label>
+                </div>
+                <div class="dgut-row" data-when="dimensions" style="gap:6px;flex-wrap:wrap;">
+                    <span style="font-size:12px;color:var(--dgut-on-surface-variant);">常用宽度</span>
+                    ${[4096, 2560, 1920, 1280, 720].map(w => `<button type="button" class="dgut-btn" data-w="${w}" style="padding:3px 10px;font-size:12px;flex:none;">${w}</button>`).join('')}
                 </div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">平滑
@@ -4510,6 +4709,11 @@ self.onmessage = function (e) {
                         <input type="checkbox" id="dgut-img-allow-resize" ${saved.allowResize ? 'checked' : ''}> 允许降低分辨率
                     </label>
                 </div>
+                <div class="dgut-row" style="gap:6px;flex-wrap:wrap;">
+                    <span style="font-size:12px;color:var(--dgut-on-surface-variant);">常用上限</span>
+                    ${[100, 300, 500, 1024].map(kb => `<button type="button" class="dgut-btn" data-kb="${kb}" style="padding:3px 10px;font-size:12px;flex:none;">${kb >= 1024 ? '1 MB' : kb + ' KB'}</button>`).join('')}
+                    <button type="button" class="dgut-btn" data-kb="0" style="padding:3px 10px;font-size:12px;flex:none;">不限</button>
+                </div>
                 <div class="dgut-row dgut-row--mb">
                     <label class="dgut-label">输出质量
                         <input type="number" id="dgut-img-quality" class="dgut-input" value="${saved.quality}" min="1" max="100" style="width:60px;padding:4px 6px;"> %
@@ -4542,7 +4746,10 @@ self.onmessage = function (e) {
         const hEl = ac.querySelector('#dgut-img-h');
         const targetEl = ac.querySelector('#dgut-img-target');
         const qualityEl = ac.querySelector('#dgut-img-quality');
-        const setStatus = (msg, isErr) => { statusEl.innerHTML = `<span style="color:${isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)'};">${escapeHtml(msg)}</span>`; };
+        const setStatus = (msg, isErr) => {
+            statusEl.textContent = msg || '';
+            statusEl.style.color = isErr ? 'var(--dgut-error)' : 'var(--dgut-on-surface-variant)';
+        };
         const refreshVisibility = () => {
             const m = sizeModeEl.value;
             ac.querySelectorAll('[data-when]').forEach(el => { el.style.display = (el.dataset.when === m) ? '' : 'none'; });
@@ -4563,7 +4770,12 @@ self.onmessage = function (e) {
             const H = Number(hEl.value) || 0;
             if (H > 0) wEl.value = Math.max(1, Math.round(H * preset.w / preset.h));
         };
-        const persistCfg = () => { try { imgSaveCfg(imgReadCfg(ac)); } catch (e) {} };
+        /* 拖动数字框/连续勾选时合并写入，避免每次按键都触发一次存储序列化 */
+        let cfgTimer = 0;
+        const persistCfg = () => {
+            clearTimeout(cfgTimer);
+            cfgTimer = setTimeout(() => { try { imgSaveCfg(imgReadCfg(ac)); } catch (e) {} }, 200);
+        };
         sizeModeEl.addEventListener('change', () => { refreshVisibility(); persistCfg(); });
         wEl.addEventListener('input', () => { syncFromWidth(); persistCfg(); });
         hEl.addEventListener('input', () => { syncFromHeight(); persistCfg(); });
@@ -4572,37 +4784,61 @@ self.onmessage = function (e) {
         ac.querySelectorAll('#dgut-img-smooth, #dgut-img-fit, #dgut-img-format, #dgut-img-inflate-mode, #dgut-img-allow-resize, #dgut-img-sharpen, #dgut-img-bw, #dgut-img-eq, #dgut-img-quality')
             .forEach(el => el.addEventListener('change', persistCfg));
         refreshVisibility(); refreshOutputState();
+        ac.querySelectorAll('[data-kb]').forEach(btn => btn.addEventListener('click', () => {
+            targetEl.value = btn.dataset.kb === '0' ? '' : btn.dataset.kb;
+            refreshOutputState(); persistCfg();
+            if (gImgState) doPreview();
+        }));
+        ac.querySelectorAll('[data-w]').forEach(btn => btn.addEventListener('click', () => {
+            wEl.value = btn.dataset.w;
+            syncFromWidth(); persistCfg();
+            if (gImgState) doPreview();
+        }));
         ac.querySelector('#dgut-img-reset').onclick = () => {
-            gImgState = null; fileEl.value = '';
+            gImgState = null; gImgLastResult = null; fileEl.value = '';
             infoEl.textContent = '尚未选择图片。';
             canvasEl.width = 0; canvasEl.height = 0;
             setStatus('');
         };
-        fileEl.addEventListener('change', async () => {
-            const file = fileEl.files && fileEl.files[0];
+        const loadFile = async (file) => {
             if (!file) return;
             setStatus('读取中…');
             try {
                 const { img } = await imgFileToImage(file);
                 gImgState = { img, file, name: file.name, size: file.size, type: file.type };
+                gImgLastResult = null;
                 infoEl.innerHTML = `原始尺寸：<b>${img.naturalWidth} × ${img.naturalHeight}</b> px · 文件大小：<b>${imgFmtSize(file.size)}</b> · 类型：<b>${escapeHtml(file.type || '未知')}</b>`;
-                canvasEl.width = img.naturalWidth; canvasEl.height = img.naturalHeight;
-                const c = canvasEl.getContext('2d');
-                c.clearRect(0, 0, canvasEl.width, canvasEl.height);
-                c.drawImage(img, 0, 0);
+                imgPaintPreview(canvasEl, img, img.naturalWidth, img.naturalHeight);
                 if (!wEl.value) wEl.value = img.naturalWidth;
                 if (!hEl.value) hEl.value = img.naturalHeight;
                 setStatus('已载入');
             } catch (e) { gImgState = null; setStatus('读取失败：' + e.message, true); }
+        };
+        fileEl.addEventListener('change', () => loadFile(fileEl.files && fileEl.files[0]));
+        const dropEl = ac.querySelector('#dgut-img-drop');
+        const markDrop = (on) => {
+            dropEl.style.borderColor = on ? 'var(--dgut-primary)' : '';
+            dropEl.style.background = on ? 'var(--dgut-surface-3)' : '';
+        };
+        ['dragenter', 'dragover'].forEach(t => dropEl.addEventListener(t, (e) => { e.preventDefault(); markDrop(true); }));
+        ['dragleave', 'dragend'].forEach(t => dropEl.addEventListener(t, () => markDrop(false)));
+        dropEl.addEventListener('drop', (e) => {
+            e.preventDefault(); markDrop(false);
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (!f) return;
+            if (!/^image\//.test(f.type)) { setStatus('请拖入图片文件', true); return; }
+            loadFile(f);
         });
         const doPreview = async () => {
+            if (gImgBusy) return null;
+            gImgBusy = true;
+            const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
             try {
                 setStatus('处理中…');
-                const { canvas, blob, inflated, achieved, targetBytes, capped } = await imgRunPipeline(ac);
-                canvasEl.width = canvas.width; canvasEl.height = canvas.height;
-                const c = canvasEl.getContext('2d');
-                c.clearRect(0, 0, canvas.width, canvas.height);
-                c.drawImage(canvas, 0, 0);
+                const { canvas, blob, inflated, achieved, targetBytes, capped, cfg } = await imgRunPipeline(ac);
+                imgPaintPreview(canvasEl, canvas, canvas.width, canvas.height);
+                /* 记住这次结果：点「下载」时若配置没变就直接复用，省掉一整轮编码 */
+                gImgLastResult = { blob, sig: imgCfgSig(cfg) };
                 let msg;
                 if (targetBytes > 0 && !achieved) {
                     msg = `无法压缩到 ${imgFmtSize(targetBytes)} · 实际 ${imgFmtSize(blob.size)}，可勾选「允许降低分辨率」。`;
@@ -4612,13 +4848,29 @@ self.onmessage = function (e) {
                     msg = `输出尺寸 ${canvas.width} × ${canvas.height} px · ${imgFmtSize(blob.size)}`;
                 }
                 if (capped) msg += '（已自动调整质量，尽量不超过原图大小）';
+                const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                const ms = Math.max(0, Math.round(t1 - t0));
+                msg += ` · 耗时 ${ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s'}`;
+                const orig = gImgState && gImgState.file ? gImgState.file.size : 0;
+                if (orig > 0) {
+                    const delta = blob.size - orig;
+                    msg += Math.abs(delta) < orig * 0.01 ? ' · 体积与原图基本持平'
+                        : (delta < 0 ? ` · 比原图小 ${Math.round(-delta / orig * 100)}%` : ` · 比原图大 ${Math.round(delta / orig * 100)}%`);
+                }
                 setStatus(msg);
                 return { canvas, blob };
             } catch (e) { setStatus('处理失败：' + e.message, true); return null; }
+            finally { gImgBusy = false; }
         };
         ac.querySelector('#dgut-img-run').onclick = doPreview;
         ac.querySelector('#dgut-img-dl').onclick = async () => {
-            const r = await doPreview();
+            let r = null;
+            /* 已经预览过且配置未改动 → 直接复用结果，不再编码一次 */
+            if (gImgLastResult && gImgState && gImgLastResult.sig === imgCfgSig(imgReadCfg(ac))) {
+                r = { blob: gImgLastResult.blob };
+            } else {
+                r = await doPreview();
+            }
             if (!r) return;
             try {
                 const base = (gImgState?.name || 'image').replace(/\.[^.]+$/, '');
@@ -4731,14 +4983,30 @@ self.onmessage = function (e) {
                     <span class="dgut-label">自定义颜色</span>
                     <input type="color" id="dgut-accent-custom" value="${/^#([0-9a-f]{6})$/i.test(accent) ? accent : '#6750A4'}" style="width:46px;height:32px;cursor:pointer;">
                     <button id="dgut-accent-apply" class="dgut-btn dgut-btn-primary">应用自定义色</button>
-                    <span style="font-size:11px;color:var(--dgut-on-surface-variant);">当前：${escapeHtml(accentOf(accent).name)}</span>
+                    <span style="font-size:11px;color:var(--dgut-on-surface-variant);">当前：<span id="dgut-accent-current">${escapeHtml(accentOf(accent).name)}</span></span>
                 </div>
             </div>`;
-        ac.querySelectorAll('.dgut-mode').forEach(b => b.onclick = () => { GM_setValue(THEME_MODE_KEY, b.dataset.mode); applyTheme(); renderAppearanceView(ac); showStatus('主题模式已更新'); });
-        ac.querySelectorAll('.dgut-accent').forEach(b => b.onclick = () => { GM_setValue(ACCENT_KEY, b.dataset.id); applyTheme(); renderAppearanceView(ac); showStatus('主体色已更新'); });
+        /* 换色只改选中态，不整页重建：少一次 innerHTML，切换也更跟手 */
+        const markMode = (v) => {
+            ac.querySelectorAll('.dgut-mode').forEach(b => {
+                const on = b.dataset.mode === v;
+                b.style.borderColor = on ? 'var(--dgut-primary)' : 'var(--dgut-outline)';
+                b.style.background = on ? 'var(--dgut-primary-container)' : 'var(--dgut-surface-3)';
+                b.style.color = on ? 'var(--dgut-on-primary-container)' : 'var(--dgut-on-surface-variant)';
+            });
+        };
+        const markAccent = (id) => {
+            ac.querySelectorAll('.dgut-accent').forEach(b => {
+                b.style.borderColor = b.dataset.id === id ? 'var(--dgut-on-surface)' : 'transparent';
+            });
+            const cur = ac.querySelector('#dgut-accent-current');
+            if (cur) cur.textContent = accentOf(id).name;
+        };
+        ac.querySelectorAll('.dgut-mode').forEach(b => b.onclick = () => { GM_setValue(THEME_MODE_KEY, b.dataset.mode); applyTheme(); markMode(b.dataset.mode); showStatus('主题模式已更新'); });
+        ac.querySelectorAll('.dgut-accent').forEach(b => b.onclick = () => { GM_setValue(ACCENT_KEY, b.dataset.id); applyTheme(); markAccent(b.dataset.id); showStatus('主体色已更新'); });
         ac.querySelector('#dgut-accent-apply').onclick = () => {
             const v = ac.querySelector('#dgut-accent-custom').value;
-            if (/^#[0-9a-f]{6}$/i.test(v)) { GM_setValue(ACCENT_KEY, v); applyTheme(); renderAppearanceView(ac); showStatus('已应用自定义主体色'); }
+            if (/^#[0-9a-f]{6}$/i.test(v)) { GM_setValue(ACCENT_KEY, v); applyTheme(); markAccent(v); showStatus('已应用自定义主体色'); }
         };
     }
 
@@ -4985,7 +5253,7 @@ self.onmessage = function (e) {
     /* 必须与 00-userscript-header.js 的 @version 保持一致；
        之前它硬编码成 v5.7.1 一路没改，导致详情页显示的版本号是错的，
        排查问题时会把所有人误导。npm run test:logic 有断言强制两者一致。 */
-    const ABOUT_VERSION = 'v5.13.5';
+    const ABOUT_VERSION = 'v5.14.0';
     const GITHUB_URL = 'https://github.com/BrocadeHutHost/DGUT-ULearningTakeQuizzesAssistant';
 
     /* ------------------------------------------------------------------
@@ -5302,18 +5570,27 @@ self.onmessage = function (e) {
             panel.style.right = 'auto'; panel.style.bottom = 'auto';
             e.preventDefault();
         });
-        document.addEventListener('mousemove', (e) => {
-            if (!drag) return;
+        /* 拖动位置每帧只写一次：逐事件改样式会让浏览器反复同步布局 */
+        let dragRaf = 0, dragPt = null;
+        const dragTick = () => {
+            dragRaf = 0;
+            if (!drag || !dragPt) return;
             const z = panelZoomOf(panel);
             const w = panelNum(panel.style.width, PANEL_DEFAULT_W) * z;
             const h = panelNum(panel.style.height, PANEL_DEFAULT_H) * z;
             const maxX = Math.max(0, window.innerWidth - w);
             const maxY = Math.max(0, window.innerHeight - Math.min(h, 120));
-            panel.style.left = Math.round(Math.max(0, Math.min(maxX, e.clientX - drag.dx))) + 'px';
-            panel.style.top = Math.round(Math.max(0, Math.min(maxY, e.clientY - drag.dy))) + 'px';
+            panel.style.left = Math.round(Math.max(0, Math.min(maxX, dragPt.x - drag.dx))) + 'px';
+            panel.style.top = Math.round(Math.max(0, Math.min(maxY, dragPt.y - drag.dy))) + 'px';
+        };
+        document.addEventListener('mousemove', (e) => {
+            if (!drag) return;
+            dragPt = { x: e.clientX, y: e.clientY };
+            if (!dragRaf) dragRaf = requestAnimationFrame(dragTick);
         });
         document.addEventListener('mouseup', () => {
             if (!drag) return;
+            if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; dragTick(); }
             drag = null;
             savePanelState(panelStateOf(panel));
         });
@@ -5339,8 +5616,15 @@ self.onmessage = function (e) {
                     h: panelNum(panel.style.height, PANEL_DEFAULT_H),
                     l: rect.left, t: rect.top
                 };
+                let moveRaf = 0, movePt = null;
                 const onMove = (ev) => {
-                    const dx = (ev.clientX - st.x) / z, dy = (ev.clientY - st.y) / z;
+                    movePt = { x: ev.clientX, y: ev.clientY };
+                    if (!moveRaf) moveRaf = requestAnimationFrame(moveTick);
+                };
+                const moveTick = () => {
+                    moveRaf = 0;
+                    if (!movePt) return;
+                    const dx = (movePt.x - st.x) / z, dy = (movePt.y - st.y) / z;
                     let w = st.w, h = st.h, l = st.l, t = st.t;
                     if (st.dir.indexOf('e') !== -1) w = st.w + dx;
                     if (st.dir.indexOf('s') !== -1) h = st.h + dy;
@@ -5360,6 +5644,7 @@ self.onmessage = function (e) {
                     panel.style.top = Math.round(t) + 'px';
                 };
                 const onUp = () => {
+                    if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = 0; moveTick(); }
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
                     savePanelState(panelStateOf(panel));
@@ -5369,13 +5654,16 @@ self.onmessage = function (e) {
             });
         });
         /* Ctrl + 滚轮：整体缩放文字与元素（等价于面板级 zoom） */
+        let zoomSaveTimer = 0;
         panel.addEventListener('wheel', (e) => {
             if (!e.ctrlKey) return;
             e.preventDefault();
             e.stopPropagation();
             const step = (e.deltaY < 0 ? 1 : -1) * PANEL_ZOOM_STEP;
             panelApplyZoom(panelZoomOf(panel) + step);
-            savePanelState(panelStateOf(panel));
+            /* 连续滚动会连着写很多次存储，停手 300ms 再落盘 */
+            clearTimeout(zoomSaveTimer);
+            zoomSaveTimer = setTimeout(() => savePanelState(panelStateOf(panel)), 300);
         }, { passive: false });
     }
     function createPanel() {
@@ -5477,10 +5765,24 @@ self.onmessage = function (e) {
     let gFabSnapMenuId = null;
     let gFabResizeBound = false;
     let gFabDockBound = false;
+    let gFabSnapOn = null;          // 开关缓存：mousemove 里不要再读一次存储
+    /* 位置/尺寸缓存：mousemove 每秒能来上百次，每次都 getBoundingClientRect
+       会强制同步布局，鼠标一动就卡；改成只在状态变化后重算一次。 */
+    let gFabBox = null;
+    let gFabRaf = 0, gFabPt = null;
+    function fabBoxDrop() { gFabBox = null; }
+    function fabBox(mini) {
+        if (gFabBox && gFabBox.el === mini && gFabBox.side === fabDockSide(mini)) return gFabBox;
+        const r = mini.getBoundingClientRect();
+        gFabBox = { el: mini, side: fabDockSide(mini), top: r.top, right: r.right, left: r.left, w: mini.offsetWidth || r.width, h: mini.offsetHeight || r.height };
+        return gFabBox;
+    }
 
     function fabEdgeSnapOn() {
-        try { return GM_getValue(FAB_EDGE_SNAP_KEY, FAB_EDGE_SNAP_DEFAULT) === true; }
-        catch (e) { return FAB_EDGE_SNAP_DEFAULT; }
+        if (gFabSnapOn !== null) return gFabSnapOn;
+        try { gFabSnapOn = GM_getValue(FAB_EDGE_SNAP_KEY, FAB_EDGE_SNAP_DEFAULT) === true; }
+        catch (e) { gFabSnapOn = FAB_EDGE_SNAP_DEFAULT; }
+        return gFabSnapOn;
     }
     function fabDockSide(mini) { return (mini && mini.dataset && mini.dataset.dockSide) || ''; }
     function fabIsShown(mini) { return !!(mini && mini.dataset && mini.dataset.dockShown === '1'); }
@@ -5499,6 +5801,7 @@ self.onmessage = function (e) {
         mini.style.right = 'auto';
         mini.style.bottom = 'auto';
         mini.style.left = Math.round(x) + 'px';
+        fabBoxDrop();
     }
     /** 吸附到某一侧并收起（只露 FAB_DOCK_PEEK） */
     function fabDockTo(mini, side) {
@@ -5510,6 +5813,7 @@ self.onmessage = function (e) {
         mini.dataset.dockShown = '0';
         mini.style.top = Math.round(fabDockTop(mini, mini.getBoundingClientRect().top, vh)) + 'px';
         fabSetX(mini, side === 'left' ? -(w - FAB_DOCK_PEEK) : (vw - FAB_DOCK_PEEK));
+        fabBoxDrop();
     }
     /** 滑出完整面板 */
     function fabDockShow(mini) {
@@ -5557,28 +5861,34 @@ self.onmessage = function (e) {
         return true;
     }
     /** 全局 mousemove：靠近边缘就滑出、离开就收回（显隐的唯一来源，避免抖动） */
+    /* 每帧只算一次：把高频的 mousemove 收敛成一次判定 */
+    function fabHoverTick() {
+        gFabRaf = 0;
+        const pt = gFabPt;
+        if (!pt || !fabEdgeSnapOn()) return;
+        const mini = document.getElementById('dgut-mini-panel');
+        if (!mini || mini.dataset.dragging === '1') return;   // 拖动中不干预
+        const side = fabDockSide(mini);
+        if (!side) return;
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        if (!vw) return;
+        const b = fabBox(mini);
+        const inBandY = pt.y >= b.top - 16 && pt.y <= b.top + b.h + 16;
+        const near = side === 'left'
+            ? pt.x <= Math.max(FAB_TRIGGER_PX, b.right + 8)
+            : pt.x >= Math.min(vw - FAB_TRIGGER_PX, b.left - 8);
+        if (near && inBandY) {
+            if (!fabIsShown(mini)) fabDockShow(mini);
+        } else if (fabIsShown(mini)) {
+            fabDockHide(mini);
+        }
+    }
     function bindFabDockTrigger() {
         if (gFabDockBound) return;
         gFabDockBound = true;
         document.addEventListener('mousemove', (e) => {
-            const mini = document.getElementById('dgut-mini-panel');
-            if (!mini || !fabEdgeSnapOn()) return;
-            if (mini.dataset.dragging === '1') return;      // 拖动中不干预
-            const side = fabDockSide(mini);
-            if (!side) return;
-            const { h } = fabSize(mini);
-            const { vw } = fabViewport();
-            if (!vw) return;
-            const r = mini.getBoundingClientRect();
-            const inBandY = e.clientY >= r.top - 16 && e.clientY <= r.top + h + 16;
-            const near = side === 'left'
-                ? e.clientX <= Math.max(FAB_TRIGGER_PX, r.right + 8)
-                : e.clientX >= Math.min(vw - FAB_TRIGGER_PX, r.left - 8);
-            if (near && inBandY) {
-                if (!fabIsShown(mini)) fabDockShow(mini);
-            } else if (fabIsShown(mini)) {
-                fabDockHide(mini);
-            }
+            gFabPt = { x: e.clientX, y: e.clientY };
+            if (!gFabRaf) gFabRaf = requestAnimationFrame(fabHoverTick);
         }, { passive: true });
     }
     function bindFabResizeSnap() {
@@ -5586,6 +5896,7 @@ self.onmessage = function (e) {
         gFabResizeBound = true;
         window.addEventListener('resize', () => {
             try {
+                fabBoxDrop();
                 const mini = document.getElementById('dgut-mini-panel');
                 if (!mini) return;
                 const side = fabDockSide(mini);
@@ -5617,6 +5928,7 @@ self.onmessage = function (e) {
     }
     function toggleFabEdgeSnap() {
         const next = !fabEdgeSnapOn();
+        gFabSnapOn = next; fabBoxDrop();
         try { GM_setValue(FAB_EDGE_SNAP_KEY, next); } catch (e) {}
         refreshFabEdgeSnapMenu();
         const mini = document.getElementById('dgut-mini-panel');
@@ -5686,6 +5998,7 @@ self.onmessage = function (e) {
             drag = null;
             mini.dataset.dragging = '';
             mini.style.transition = 'left .18s ease, top .18s ease';
+            fabBoxDrop();
             if (moved) {
                 applyFabSnap(mini);                  // 靠边就吸附收起到 5px，否则解除吸附
                 const rect = mini.getBoundingClientRect();
@@ -5710,6 +6023,7 @@ self.onmessage = function (e) {
         const existing = document.getElementById('dgut-main-panel');
         const mini = document.getElementById('dgut-mini-panel');
         if (existing && !forceOpen) {
+            try { stopStatusTicker(); } catch (e) {}   // 面板都没了，别再每秒刷状态栏
             existing.remove();
             GM_setValue(PANEL_OPEN_KEY, false);
             if (!mini) createMiniPanel();
